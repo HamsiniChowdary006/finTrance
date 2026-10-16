@@ -1,0 +1,2 @@
+metrics:
+  gross_advances: {unit: "INR crore", aliases: ["gross advances", "loan book", "aum"]}

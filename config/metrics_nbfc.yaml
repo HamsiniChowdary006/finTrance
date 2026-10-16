@@ -1,0 +1,14 @@
+metrics:
+  gross_advances: {unit: "INR crore", aliases: ["gross advances", "loan book", "aum", "assets under management"]}
+  gross_npa: {unit: "INR crore", aliases: ["gross npa", "gross non-performing assets"]}
+  net_npa: {unit: "INR crore", aliases: ["net npa", "net non-performing assets"]}
+  gnpa_pct: {unit: "%", aliases: ["gnpa %", "gross npa %", "gross npa ratio"]}
+  nnpa_pct: {unit: "%", aliases: ["nnpa %", "net npa %", "net npa ratio"]}
+  provisions_on_npa: {unit: "INR crore", aliases: ["provisions on npa", "npa provisions"]}
+  slippages: {unit: "INR crore", aliases: ["slippages", "fresh slippages"]}
+  write_offs: {unit: "INR crore", aliases: ["write offs", "write-offs"]}
+  credit_cost: {unit: "%", aliases: ["credit cost"]}
+  stage1_assets: {unit: "INR crore", aliases: ["stage 1 assets", "stage 1"]}
+  stage2_assets: {unit: "INR crore", aliases: ["stage 2 assets", "stage 2"]}
+  stage3_assets: {unit: "INR crore", aliases: ["stage 3 assets", "stage 3"]}
+  ecl_provisions: {unit: "INR crore", aliases: ["ecl provisions", "expected credit loss"]}

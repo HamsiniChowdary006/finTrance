@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fintrance"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2,<3",
+  "pandas>=2",
+  "PyMuPDF>=1.23",
+  "pdfplumber>=0.10",
+  "requests>=2.31",
+  "PyYAML>=6",
+  "tenacity>=8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+include = ["agent*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
