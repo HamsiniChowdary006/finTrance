@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from agent.security import safe_path
 from schemas.models import CompanyProfile, DocRef, SourceType
 
 from .base import Source
@@ -11,7 +12,7 @@ class ManualDropSource(Source):
 
     def search(self, profile: CompanyProfile) -> list[DocRef]:
         ticker = profile.symbol or profile.name
-        folder = self.root / ticker
+        folder = safe_path(self.root / ticker, self.root)
         paths = sorted(folder.glob("*")) if folder.exists() else []
         return [DocRef(ticker=ticker, source_type=SourceType.MANUAL, title=path.name,
                        local_path=path) for path in paths

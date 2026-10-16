@@ -1,0 +1,23 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: python -m ruff check .
+        language: system
+        pass_filenames: false
+      - id: secret-scan
+        name: secret scan
+        entry: python scripts/scan_secrets.py
+        language: system
+        pass_filenames: false
+      - id: company-name-guard
+        name: company name guard
+        entry: python scripts/check_no_company_names.py
+        language: system
+        pass_filenames: false
+      - id: artifact-size-and-path
+        name: artifact size and path guard
+        entry: python scripts/check_artifacts.py
+        language: system
+        pass_filenames: false

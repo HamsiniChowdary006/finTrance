@@ -28,3 +28,13 @@ request succeeds and its response shape is documented in `docs/DATA_SOURCES.md`.
 4. Declare R1-R4 thresholds in YAML and implement generic rule evaluation and scoring.
 5. Add `analyze` CLI output/JSON, then run the complete offline suite, Ruff, and the
    company-name guard. No real-data conclusion is valid when the facts table is empty.
+
+## P0-c security and evidence pipeline plan
+
+1. Harden repository hygiene, secret handling, network/file boundaries, logging, and CI;
+   audit tracked files/history and commit this security slice before feature work.
+2. Add provenance-first hypothesis, investigation, red-team, grading, orchestration, and
+   rendering contracts with deterministic offline fallbacks and no investment advice.
+3. Add a complete offline `run` path over clearly labelled SYNTHETIC fixtures, then validate
+   tests, lint, name/secret scans, and tracked-artifact hygiene. Real findings remain absent
+   when the evidence database is empty.

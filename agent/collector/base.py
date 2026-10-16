@@ -6,6 +6,7 @@ from pathlib import Path
 
 import requests
 
+from agent.security import SafeHTTP, safe_path
 from schemas.models import CompanyProfile, DocRef, Document
 
 
@@ -20,10 +21,13 @@ class Source(ABC):
 
 
 class Cache:
-    def __init__(self, root: str | Path = "store/cache", user_agent: str = "finTrance-research/0.1"):
+    def __init__(self, root: str | Path = "store/cache",
+                 allowed_domains: set[str] | None = None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.user_agent = user_agent
+        self.root = self.root.resolve()
+        self.http = SafeHTTP(allowed_domains or {"www.bseindia.com", "www.nseindia.com",
+                                                  "www.crisil.com"})
         self.last_request: dict[str, float] = {}
 
     def download(self, url: str, ticker: str) -> tuple[Path, str]:
@@ -36,13 +40,12 @@ class Cache:
         wait = 1.0 - (time.monotonic() - self.last_request.get(host, 0))
         if wait > 0:
             time.sleep(wait)
-        response = requests.get(url, headers={"User-Agent": self.user_agent}, timeout=30)
+        content = self.http.get(url)
         self.last_request[host] = time.monotonic()
-        response.raise_for_status()
-        digest = hashlib.sha256(response.content).hexdigest()
-        target = self.root / ticker / digest
+        digest = hashlib.sha256(content).hexdigest()
+        target = safe_path(self.root / ticker / digest, self.root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(response.content)
+        target.write_bytes(content)
         entries[url] = str(target)
         index.write_text(json.dumps(entries, indent=2), encoding="utf-8")
         return target, digest

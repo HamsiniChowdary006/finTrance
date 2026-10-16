@@ -1,0 +1,7 @@
+allowed_domains:
+  - www.bseindia.com
+  - www.nseindia.com
+  - www.crisil.com
+max_response_bytes: 20000000
+max_document_bytes: 20000000
+max_pdf_pages: 300
