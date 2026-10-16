@@ -16,3 +16,15 @@ Exchange-hosted filings are preferred, followed by company investor-relations pa
 manual drops. Exchange APIs and PDF layouts can change, so every response is cached and source
 gaps are recorded rather than hidden. No endpoint is treated as verified until an actual
 request succeeds and its response shape is documented in `docs/DATA_SOURCES.md`.
+
+## P0-b calculator and scanner plan
+
+1. Precheck SQLite facts and print company/metric/quarter coverage; use only real facts for
+   live analysis and clearly labelled synthetic fixtures for offline tests.
+2. Build provenance-carrying quarterly series and deterministic metric formulas, selecting
+   metrics by company type from YAML.
+3. Add runtime peer comparison, corporate/statistical break detection, and non-comparable
+   windows.
+4. Declare R1-R4 thresholds in YAML and implement generic rule evaluation and scoring.
+5. Add `analyze` CLI output/JSON, then run the complete offline suite, Ruff, and the
+   company-name guard. No real-data conclusion is valid when the facts table is empty.

@@ -1,0 +1,24 @@
+R1:
+  growth_min: 0.20
+  multiple: 2.0
+  min_persistence: 4
+R2:
+  writeoff_materiality: 0.10
+R3:
+  min_persistence: 2
+R4:
+  pcr_drop: 5.0
+  quarters: 6
+breaks:
+  jump_threshold: 0.15
+  cusum_sensitivity: 2.0
+  keywords:
+    - merger
+    - amalgamation
+    - demerger
+    - acquisition
+    - scheme of arrangement
+    - reclassification
+    - change in accounting policy
+    - RBI restriction
+    - penalty
