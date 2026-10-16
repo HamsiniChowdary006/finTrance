@@ -9,7 +9,9 @@ from agent.calc.metrics import loan_growth_yoy
 from agent.calc.timeseries import quarterly_frame
 from agent.collector.manual import ManualDropSource
 from agent.extractor.document import extract_facts, read_document
+from agent.orchestrator import Orchestrator
 from agent.profiler import profile_company
+from agent.render.report import markdown
 from agent.scan.rules import evaluate_rules, load_rules
 from agent.scan.scoring import rank_anomalies
 from schemas.models import Fact, PeriodType
@@ -32,6 +34,11 @@ def main() -> int:
     analyze.add_argument("--company", required=True)
     analyze.add_argument("--peers", default="")
     analyze.add_argument("--json", dest="json_path")
+    run = sub.add_parser("run")
+    run.add_argument("--company", required=True)
+    run.add_argument("--peers", default="")
+    run.add_argument("--format", choices=("md", "json"), default="md")
+    run.add_argument("--no-llm", action="store_true")
     args = parser.parse_args()
     if args.command == "extract":
         profile = profile_company(args.company)
@@ -89,6 +96,11 @@ def main() -> int:
                       "top3": [item.model_dump() for item in top3]}
         if args.json_path:
             Path(args.json_path).write_text(json.dumps(result, default=str, indent=2), encoding="utf-8")
+    elif args.command == "run":
+        result = Orchestrator(callback=lambda event: print(
+            f"[{event['stage']}] {event['status']}: {event['message']}")).run(args.company)
+        output = result.report.model_dump_json(indent=2) if args.format == "json" else markdown(result.report)
+        print(output)
     return 0
 
 

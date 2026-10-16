@@ -12,7 +12,7 @@ def test_no_unsafe_parsing_or_execution():
 
 
 def test_no_f_string_sql():
-    text = "\n".join(path.read_text(encoding="utf-8") for path in (Path("agent"), Path("store"))
-                     if path.is_file())
+    paths = list(Path("agent").rglob("*.py")) + list(Path("store").rglob("*.py"))
+    text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
     assert "f\"SELECT" not in text
     assert "f'SELECT" not in text

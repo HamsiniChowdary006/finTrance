@@ -41,3 +41,10 @@ with a reason and every computed result carries source fact IDs.
 
 R1-R4 thresholds are declared in `config/anomaly_rules.yaml`. Rules are generic and
 synthetic tests are never presented as real findings.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for secret handling, SSRF/path protections, artifact policy,
+and the five-command pre-push checklist. `python -m agent.cli run --company "runtime name"
+--no-llm` uses deterministic mode and never requires a provider key. The renderer includes no
+investment recommendation.

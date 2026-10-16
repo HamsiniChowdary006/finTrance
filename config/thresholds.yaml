@@ -1,3 +1,6 @@
 gnpa_pct: {min: 0, max: 40}
 nnpa_pct: {min: 0, max: 40}
 credit_cost: {min: -10, max: 40}
+grader:
+  strong_min: 8
+  moderate_min: 4

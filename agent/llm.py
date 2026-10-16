@@ -7,6 +7,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from agent.security import configure_environment
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -21,7 +23,12 @@ class StructuredLLM:
         self.model = os.getenv("LLM_MODEL", "")
         self.api_key = os.getenv("LLM_API_KEY")
         self.budget = int(os.getenv("LLM_BUDGET", "20"))
+        self.token_budget = int(os.getenv("LLM_TOKEN_BUDGET", "100000"))
+        self.run_budget = int(os.getenv("LLM_RUN_BUDGET", "20"))
+        self.kill_switch = os.getenv("LLM_KILL_SWITCH", "0") == "1"
+        configure_environment()
         self.calls = 0
+        self.tokens = 0
         self.responder = responder
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -31,13 +38,21 @@ class StructuredLLM:
         path = self.cache_dir / f"{key}.json"
         if path.exists():
             return schema.model_validate_json(path.read_text(encoding="utf-8"))
+        if self.kill_switch:
+            raise LLMError("LLM kill switch is enabled")
         if self.provider == "none" or self.responder is None:
             raise LLMError("LLM_PROVIDER=none; structured extraction is unavailable")
+        if self.calls >= min(self.budget, self.run_budget):
+            raise LLMError("LLM call budget exhausted")
+        estimated_tokens = len(prompt) // 4
+        if self.tokens + estimated_tokens > self.token_budget:
+            raise LLMError("LLM token budget exhausted")
         last_error: Exception | None = None
         for _ in range(2):
             if self.calls >= self.budget:
                 raise LLMError("LLM call budget exhausted")
             self.calls += 1
+            self.tokens += estimated_tokens
             try:
                 result = schema.model_validate_json(self.responder(prompt, self.model, self.api_key))
                 path.write_text(result.model_dump_json(), encoding="utf-8")

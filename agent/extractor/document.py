@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from agent.extractor.pdf_parse import extract_pages
 from agent.extractor.validators import normalise_amount, parse_period, validate_quote_and_bounds
@@ -24,8 +25,14 @@ METRICS = {
 
 def read_document(path: str | Path) -> str:
     path = Path(path)
+    limits = yaml.safe_load(Path("config/security.yaml").read_text(encoding="utf-8"))
+    if path.stat().st_size > limits["max_document_bytes"]:
+        raise ValueError("document exceeds configured size limit")
     if path.suffix.casefold() == ".pdf":
-        return "\n".join(extract_pages(path))
+        pages = extract_pages(path)
+        if len(pages) > limits["max_pdf_pages"]:
+            raise ValueError("PDF exceeds configured page limit")
+        return "\n".join(pages)
     if path.suffix.casefold() in {".html", ".htm"}:
         frame = pd.read_html(path)[0].astype(str)
         return "\n".join(" ".join(row) for row in frame.to_numpy())
