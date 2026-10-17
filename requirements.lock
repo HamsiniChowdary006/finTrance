@@ -4,7 +4,6 @@ cffi==2.1.1
 charset-normalizer==3.5.2
 colorama==0.4.6
 cryptography==50.0.2
--e git+https://github.com/HamsiniChowdary006/finTrance@ab811dd6b2d7f2d1f488d1bc025dfbefb96afea9#egg=fintrance
 idna==3.20
 iniconfig==2.3.1
 numpy==2.5.4
