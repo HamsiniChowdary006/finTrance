@@ -21,7 +21,7 @@ dependencies = [
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
-include = ["agent*"]
+include = ["agent*", "schemas*", "store*"]
 
 [tool.ruff]
 line-length = 100
