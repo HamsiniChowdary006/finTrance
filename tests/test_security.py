@@ -4,6 +4,7 @@ import logging
 import pytest
 
 from agent.security import RedactionFilter, SafeHTTP, safe_path
+from scripts.scan_secrets import scan_text
 
 
 def test_key_redaction(caplog):
@@ -30,3 +31,8 @@ def test_safe_http_rejects_non_allowlisted_and_non_https():
         client.get("http://example.com/")
     with pytest.raises(ValueError):
         client.get("https://127.0.0.1/")
+
+
+def test_git_ref_is_not_secret():
+    assert scan_text("synthetic-history",
+                     "HamsiniChowdary006/copilot/fix-failing-github-actions-job") == []

@@ -24,7 +24,10 @@ def scan_text(label: str, text: str) -> list[str]:
     findings = [f"{label}: credential pattern {pattern.pattern[:40]}"
                 for pattern in PATTERNS if pattern.search(text)]
     for token in re.findall(r"\b[A-Za-z0-9+/=_\-]{32,}\b", text):
-        if entropy(token) >= 4.2 and not token.startswith(("SYNTHETIC", "sha")):
+        # Git refs and repository paths are not credentials; credential-shaped patterns
+        # above still catch explicit key/token/password assignments.
+        if (entropy(token) >= 4.2 and "/" not in token
+                and not token.startswith(("SYNTHETIC", "sha"))):
             findings.append(f"{label}: high-entropy token detected (length={len(token)})")
     return findings
 
