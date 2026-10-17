@@ -1,5 +1,7 @@
-"""Evidence-only Streamlit dashboard for a stored or synthetic run."""
+"""Evidence-only Streamlit dashboard for stored or synthetic runs."""
+import json
 from html import escape
+from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -32,11 +34,35 @@ def run_dashboard(company: str, peers: list[str], log_placeholder):
 
 st.set_page_config(page_title="finTrance", layout="wide")
 st.title("finTrance evidence dashboard")
-company = st.text_input("Company or ticker")
+if st.session_state.get("synthetic_demo") or __import__("os").environ.get("FINTRANCE_SYNTHETIC") == "1":
+    st.warning("SYNTHETIC demo data is shown; it is not a real finding.", icon=":material/science:")
+
+
+def available_reports() -> list[Path]:
+    return sorted(Path("out").glob("*/report.json")) if Path("out").exists() else []
+
+
+reports = available_reports()
+rerun_company = st.session_state.pop("rerun_company", None)
+if reports:
+    selected = st.selectbox("Company", [path.parent.name for path in reports])
+    selected_report = Path("out") / selected / "report.json"
+    report_payload = json.loads(selected_report.read_text(encoding="utf-8"))
+    if selected.startswith("SYNTHETIC"):
+        st.warning("SYNTHETIC demo data is shown; it is not a real finding.")
+    st.subheader("Latest saved report")
+    st.write(report_payload.get("discovery", "No discovery available."))
+    if st.button("Re-run selected company"):
+        st.session_state["rerun_company"] = selected
+        st.rerun()
+else:
+    st.info("No saved reports yet. Run the launcher or enter a company below.")
+
+company = st.text_input("Company or ticker", value=rerun_company or "")
 peer_text = st.text_input("Optional peers (comma separated)")
 run = st.button("Run deterministic pipeline", type="primary")
 
-if run and company.strip():
+if (run or rerun_company) and company.strip():
     logs = st.empty()
     with st.status("Running evidence pipeline", expanded=True) as status:
         report, events = run_dashboard(

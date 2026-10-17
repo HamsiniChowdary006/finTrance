@@ -18,6 +18,32 @@ python -m agent.cli extract --company "a company" --no-llm
 The current foundation deliberately reports missing coverage when no verified documents are
 available. It does not fabricate exchange symbols, endpoint URLs, values, or evidence.
 
+## One-command launcher
+
+From a fresh checkout:
+
+```text
+python run_demo.py --dry-run
+python run_demo.py --synthetic --no-app
+python run_demo.py
+```
+
+The launcher installs the editable project only when required imports are missing,
+loads `.env` without printing credentials, ingests each folder under
+`store/manual_drop/<ticker>/`, writes `out/<ticker>/report.md`, `report.json`,
+and `run_log.json`, and opens Streamlit on the first available port at or after
+8501. Use `--no-app` in automation. `--reingest` processes unchanged files again,
+`--ticker X` or `--company "Display name"` selects one company, and
+`--peers A,B` overrides peer discovery.
+
+`--synthetic` is an explicitly labelled offline demonstration only. It is
+available when the manual-drop directory is empty and must not be interpreted
+as a real company finding. Without real files, the launcher stops with an
+actionable message rather than fabricating data. `--check` runs pytest, Ruff,
+the company-name guard, secret scan, and artifact check in that order, stopping
+at the first failure. `--dry-run` performs no installation, writes, or browser
+launch.
+
 ## Checks
 
 ```text
