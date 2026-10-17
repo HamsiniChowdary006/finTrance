@@ -18,8 +18,8 @@ def main() -> int:
         except (OSError, UnicodeDecodeError):
             continue
     history = subprocess.run(["git", "log", "-p", "--all", "--", "."], cwd=ROOT,
-                             capture_output=True, text=True, check=True)
-    findings.extend(scan_text("git-history", history.stdout))
+                             capture_output=True, check=True)
+    findings.extend(scan_text("git-history", history.stdout.decode("utf-8", errors="replace")))
     if findings:
         print("\n".join(sorted(set(findings))))
         return 1

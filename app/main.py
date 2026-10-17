@@ -47,6 +47,10 @@ if run and company.strip():
     st.metric("Evidence strength", f"{report.evidence_strength.label} "
               f"({report.evidence_strength.total})")
     st.write(report.evidence_strength.points)
+    st.subheader("Why this is not obvious")
+    st.write(report.novelty_rationale)
+    st.subheader("Also considered")
+    st.dataframe(pd.DataFrame(report.also_considered), width="stretch")
 
     frame = metric_frame(EvidenceStore(), company.strip())
     if not frame.empty:

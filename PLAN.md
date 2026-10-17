@@ -49,3 +49,10 @@ request succeeds and its response shape is documented in `docs/DATA_SOURCES.md`.
   collection boundaries, and a Streamlit evidence dashboard.
 - [ ] P2: open-ended anomalies, novelty scoring, and runner-up hypothesis logic.
 - [ ] P3: batch tests, broader caching, and speed profiling.
+
+## P2 completion
+
+- [x] Add config-driven open-ended detectors, deduplication, stability metadata,
+  novelty scoring, and multi-hypothesis ranking.
+- [x] Add runner-up rendering and a labelled SYNTHETIC evaluation harness.
+- [ ] P3: broaden the evaluation corpus, batch companies, and optimize caching/speed.

@@ -22,6 +22,11 @@ class Anomaly(BaseModel):
     description: str
     score: float = 0.0
     novelty: float = 0.0
+    novelty_rationale: str = ""
+    evidence_quotes: list[str] = Field(default_factory=list)
+    doc_ids: list[str] = Field(default_factory=list)
+    agreed_detectors: list[str] = Field(default_factory=list)
+    stability: str = "unassessed"
 
 
 def load_rules(path: str | Path = "config/anomaly_rules.yaml") -> dict:

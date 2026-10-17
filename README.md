@@ -71,3 +71,14 @@ intentionally empty until a public endpoint is captured and verified; see
 [docs/CAPTURE_ENDPOINTS.md](docs/CAPTURE_ENDPOINTS.md). Run the dashboard with
 `streamlit run app/main.py`. Synthetic fixtures are labelled and are not real
 research findings.
+
+## P2 discovery and robustness
+
+Open-ended detectors D1-D6 cover robust outliers, relationship breaks,
+peer-relative divergence, mix shifts, unexplained change-points, and disclosure
+drift. Their thresholds are in [config/open_ended.yaml](config/open_ended.yaml)
+and configured metric relationships are in
+[config/metric_relations.yaml](config/metric_relations.yaml). Anomalies receive
+deterministic novelty, stability, and detector-agreement metadata; the run keeps
+runner-up hypotheses in the report. Run the labelled SYNTHETIC smoke evaluation
+with `python scripts/eval_synthetic.py`.

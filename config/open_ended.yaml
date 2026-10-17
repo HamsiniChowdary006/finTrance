@@ -1,0 +1,30 @@
+detectors:
+  D1:
+    rolling_window: 4
+    mad_z: 3.5
+    recent_quarters: 2
+    min_history: 6
+    min_delta: 5.0
+  D2:
+    window: 4
+    correlation_shift: 0.5
+    min_history: 8
+  D3:
+    window: 6
+    min_peers: 3
+    slope_gap: 0.1
+  D4:
+    shift_points: 10.0
+    window: 8
+  D5:
+    window: 2
+    min_history: 8
+  D6:
+    headings: ["highlights", "summary", "risk factors", "asset quality"]
+    terms: ["restructured", "moratorium", "one-time", "ECL overlay", "write-off policy", "concentration"]
+guards:
+  max_anomalies: 12
+  min_persistence: 1
+  stability_perturbation: 0.2
+scoring:
+  magnitude_cap: 4.0

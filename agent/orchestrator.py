@@ -4,8 +4,10 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
+import yaml
 
 from agent.calc.breaks import jump_quarters
 from agent.calc.funding import eight_quarter_change, funding_hhi, funding_mix_share
@@ -24,6 +26,18 @@ from agent.reason.hypothesize import deterministic_hypotheses
 from agent.reason.investigate import investigate
 from agent.reason.redteam import red_team
 from agent.render.report import render_report
+from agent.scan.novelty import score_novelty
+from agent.scan.open_ended import (
+    deduplicate,
+    disclosure_drift,
+    load_open_ended,
+    mix_shift,
+    peer_divergence,
+    relationship_break,
+    robust_outliers,
+    stability,
+    unexplained_change_points,
+)
 from agent.scan.rules import evaluate_rules, load_rules
 from agent.scan.scoring import rank_anomalies
 from schemas.models import Claim, ClaimEvidence, Run
@@ -143,7 +157,38 @@ class Orchestrator:
             for result in data.values():
                 result.values.loc[result.values.index.isin(breaks)] = float("nan")
         anomalies = evaluate_rules(data, load_rules()) if data else []
-        ranked = rank_anomalies(anomalies)
+        open_config = load_open_ended()
+        series = {name: value for name, value in data.items()
+                  if hasattr(value, "values") and hasattr(value, "fact_ids")}
+        anomalies.extend(robust_outliers(series, open_config))
+        relation_config = yaml.safe_load(
+            Path("config/metric_relations.yaml").read_text(encoding="utf-8"))["relations"]
+        anomalies.extend(relationship_break(series, relation_config,
+                                            open_config["detectors"]["D2"]))
+        if "funding_shares" in data:
+            anomalies.extend(mix_shift(data["funding_shares"], open_config))
+        if peers and "gross_advances" in series and len(peers) >= open_config["detectors"]["D3"]["min_peers"]:
+            peer_values = []
+            for peer in peers:
+                peer_frame, _ = quarterly_frame(self.store.facts_for(peer))
+                if "gross_advances" in peer_frame:
+                    peer_values.append(peer_frame["gross_advances"])
+            if len(peer_values) >= open_config["detectors"]["D3"]["min_peers"]:
+                peer_median = pd.DataFrame(peer_values).T.median()
+                anomalies.extend(peer_divergence(
+                    series["gross_advances"], peer_median, open_config["detectors"]["D3"]))
+        if "gross_advances" in series:
+            anomalies.extend(unexplained_change_points(
+                series["gross_advances"], breaks, open_config))
+        anomalies.extend(disclosure_drift(documents, open_config))
+        anomalies = deduplicate(anomalies, open_config)
+        for anomaly in anomalies:
+            anomaly.peer_check = "sufficient" if len(peers) >= 3 else "insufficient"
+            score_novelty(anomaly, frame.to_string() if not frame.empty else "",
+                          anomaly.peer_check)
+            stability(anomaly, None, open_config)
+        ranked = rank_anomalies(anomalies, limit=open_config["guards"]["max_anomalies"],
+                                config=open_config)
         for anomaly in ranked:
             anomaly.peer_check = "sufficient" if len(peers) >= 3 else "insufficient"
         self._emit("SCAN", "completed" if ranked else "skipped",
@@ -153,17 +198,19 @@ class Orchestrator:
 
         hypotheses = deterministic_hypotheses([item.model_dump() for item in ranked],
                                               frame.to_string() if not frame.empty else "")
-        if len(hypotheses) == 1 and not ranked:
+        if not ranked:
             base = hypotheses[0]
             hypotheses.extend(base.model_copy(update={"id": f"H0-{index}",
-                                                      "mechanism": "The prior candidate was refuted."})
+                                                      "mechanism": "No detector-backed candidate survived."})
                               for index in (1, 2))
         self._emit("HYPOTHESIZE", "completed", "deterministic evidence-bound hypothesis mode",
                    {"hypotheses": len(hypotheses), "anomaly_inputs": len(ranked)}, started)
-        investigation = None
-        redteam = None
-        hypothesis = hypotheses[0]
-        for attempt, candidate in enumerate(hypotheses[:3]):
+        candidate_results = []
+        for attempt, candidate in enumerate(hypotheses[:open_config["guards"]["max_anomalies"]]):
+            if time.monotonic() - started > self.wall_clock_seconds:
+                self._emit("HYPOTHESIZE", "stopped", "wall-clock budget exhausted",
+                           {"evaluated": len(candidate_results)}, started)
+                break
             hypothesis = candidate
             investigation = investigate(hypothesis, facts, documents, evidence_budget=20)
             claim_id = f"{run_id}-{hypothesis.id}"
@@ -184,26 +231,44 @@ class Orchestrator:
                                peer_pattern=len(peers) >= 3, low_confidence=low_confidence)
             self._emit("REDTEAM", redteam.verdict, redteam.strongest_counterargument,
                        {"attempt": attempt + 1, "checks": len(redteam.checks)}, started)
-            if redteam.verdict != "refuted":
-                break
-        assert investigation is not None and redteam is not None
-        evidence_facts = [facts_by_id for facts_by_id in facts
-                          if facts_by_id.fact_id in hypothesis.fact_ids]
-        source_types = len({doc.source_type for doc in documents
-                            if doc.doc_id in {item.doc_id for item in investigation.evidence}})
-        primary = any(doc.source_type.value in {"exchange", "rbi", "manual"}
-                      for doc in documents if doc.doc_id in {item.doc_id for item in investigation.evidence})
-        final_grade = grade(len({item.doc_id for item in investigation.evidence}), source_types,
-                            max((item.persistence_quarters for item in ranked), default=0),
-                            len(peers) >= 3, primary, redteam.verdict == "weakened",
-                            not facts or any(f.confidence < 0.6 for f in evidence_facts),
-                            bool(breaks))
+            evidence_facts = [item for item in facts if item.fact_id in hypothesis.fact_ids]
+            evidence_doc_ids = {item.doc_id for item in investigation.evidence}
+            source_types = len({doc.source_type for doc in documents if doc.doc_id in evidence_doc_ids})
+            primary = any(doc.source_type.value in {"exchange", "rbi", "manual"}
+                          for doc in documents if doc.doc_id in evidence_doc_ids)
+            anomaly = next((item for item in ranked if item.rule_id == candidate.id.removeprefix("H-")), None)
+            final_grade = grade(len(evidence_doc_ids), source_types,
+                                anomaly.persistence_quarters if anomaly else 0,
+                                len(peers) >= 3, primary, redteam.verdict == "weakened",
+                                not evidence_facts or any(f.confidence < 0.6 for f in evidence_facts),
+                                bool(breaks), anomaly.stability == "pass" if anomaly else False,
+                                len(anomaly.agreed_detectors) >= 2 if anomaly else False)
+            candidate_results.append((candidate, investigation, redteam, final_grade, anomaly))
+        if not candidate_results:
+            fallback = deterministic_hypotheses([], "")[0]
+            investigation = investigate(fallback, facts, documents, evidence_budget=20)
+            redteam = red_team(fallback, [])
+            final_grade = grade(0, 0, 0, False, False, True, True, False)
+            hypothesis = fallback
+            chosen = (fallback, investigation, redteam, final_grade, None)
+        else:
+            rank = {"survives": 2, "weakened": 1, "refuted": 0}
+            chosen = max(candidate_results,
+                         key=lambda item: (rank[item[2].verdict], item[3].total,
+                                            item[4].novelty if item[4] else 0,
+                                            item[4].stability == "pass" if item[4] else False))
+            hypothesis, investigation, redteam, final_grade, _chosen_anomaly = chosen
+        evidence_facts = [item for item in facts if item.fact_id in hypothesis.fact_ids]
+        also_considered = [{"hypothesis": item[0].id, "grade": item[3].label,
+                            "reason": item[2].strongest_counterargument}
+                           for item in candidate_results if item[0].id != hypothesis.id]
         self._emit("GRADE", "completed", final_grade.label,
                    {"score": final_grade.total, "evidence_facts": len(evidence_facts)}, started)
         report = render_report(hypothesis.statement, investigation.evidence,
                                investigation.timeline, redteam.strongest_counterargument,
                                redteam.falsification_condition, final_grade,
-                               [item.model_dump() for item in ranked])
+                               [item.model_dump() for item in ranked],
+                               hypothesis.novelty_rationale, also_considered)
         self._emit("RENDER", "completed", "report rendered with evidence filter",
                    {"evidence": len(report.evidence), "anomalies": len(report.anomalies)}, started)
         self.store.connection.execute("UPDATE runs SET status=?, log_json=? WHERE run_id=?",
