@@ -1,0 +1,2 @@
+metrics: [gross_advances, gross_npa, net_npa, gnpa_pct, nnpa_pct, total_deposits, casa_ratio]
+weights: {management: 0.4, obviousness: 0.3, peer_uniqueness: 0.3}

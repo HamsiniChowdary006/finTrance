@@ -49,3 +49,5 @@ class RenderedReport(BaseModel):
     falsification_condition: str
     evidence_strength: Grade
     anomalies: list[dict] = Field(default_factory=list)
+    novelty_rationale: str = ""
+    also_considered: list[dict] = Field(default_factory=list)

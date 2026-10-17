@@ -4,3 +4,5 @@ credit_cost: {min: -10, max: 40}
 grader:
   strong_min: 8
   moderate_min: 4
+  stability_points: 1
+  agreement_points: 1

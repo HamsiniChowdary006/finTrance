@@ -28,13 +28,13 @@ def deterministic_hypotheses(anomalies: list[dict], metrics: str = "") -> list[H
                            mechanism="The available evidence does not establish a rule-backed pattern.",
                            predicted_evidence=[], data_needed=["quarterly facts and source evidence"],
                            novelty_rationale="No anomaly passed the minimum evidence threshold.")]
-    first = anomalies[0]
     return [Hypothesis(
-        id=f"H-{first.get('rule_id', '0')}",
-        statement=f"{first.get('description', 'The observed metric pattern warrants investigation.')}",
-        mechanism="The rule-linked metrics moved together across the reported window.",
-        predicted_evidence=[f"Verify {metric}" for metric in first.get("metrics", [])],
-        data_needed=list(first.get("metrics", [])),
-        novelty_rationale="Generated from a deterministic anomaly rule, not an LLM.",
-        fact_ids=list(first.get("fact_ids", [])),
-    )]
+        id=f"H-{item.get('rule_id', index)}",
+        statement=f"{item.get('description', 'The observed metric pattern warrants investigation.')}",
+        mechanism="The detector-linked metrics moved together across the reported window.",
+        predicted_evidence=[f"Verify {metric}" for metric in item.get("metrics", [])],
+        data_needed=list(item.get("metrics", [])),
+        novelty_rationale=item.get("novelty_rationale")
+        or "Generated from a deterministic detector, not an LLM.",
+        fact_ids=list(item.get("fact_ids", [])),
+    ) for index, item in enumerate(anomalies)]

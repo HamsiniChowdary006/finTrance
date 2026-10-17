@@ -1,0 +1,4 @@
+relations:
+  - {left: loan_growth_yoy, right: stress, direction: inverse, window: 4}
+  - {left: provisions_on_npa, right: slippages, direction: positive, window: 4}
+  - {left: total_deposits, right: gross_advances, direction: positive, window: 4}
