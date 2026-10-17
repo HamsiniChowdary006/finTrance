@@ -3,8 +3,7 @@ import logging
 
 import pytest
 
-from agent.security import RedactionFilter, SafeHTTP, safe_path
-from scripts.scan_secrets import scan_text
+from agent.security import RedactionFilter, SafeHTTP, safe_path, scan_text
 
 
 def test_key_redaction(caplog):

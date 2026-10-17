@@ -1,5 +1,6 @@
 import ipaddress
 import logging
+import math
 import os
 import re
 import socket
@@ -15,6 +16,28 @@ except ImportError:  # pragma: no cover - dependency is declared
 
 
 KEY_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+|(?:api[_-]?key|secret|token|password)\s*[:=]\s*)\S+")
+SECRET_PATTERNS = [
+    re.compile(r"(?i)\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/.+=]{12,}"),
+    re.compile(r"\bsk-[A-Za-z0-9]{16,}\b"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+=]{16,}"),
+    re.compile(r"-----BEGIN (?:RSA|OPENSSH|EC|PGP) PRIVATE KEY-----"),
+]
+
+
+def _entropy(value: str) -> float:
+    counts = {char: value.count(char) for char in set(value)}
+    return -sum((count / len(value)) * math.log2(count / len(value))
+                for count in counts.values())
+
+
+def scan_text(label: str, text: str) -> list[str]:
+    findings = [f"{label}: credential pattern {pattern.pattern[:40]}"
+                for pattern in SECRET_PATTERNS if pattern.search(text)]
+    for token in re.findall(r"\b[A-Za-z0-9+/=_\-]{32,}\b", text):
+        if (_entropy(token) >= 4.2 and "/" not in token
+                and not token.startswith(("SYNTHETIC", "sha"))):
+            findings.append(f"{label}: high-entropy token detected (length={len(token)})")
+    return findings
 
 
 class RedactionFilter(logging.Filter):
