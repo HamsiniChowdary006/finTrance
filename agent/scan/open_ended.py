@@ -20,7 +20,11 @@ def _ids(result: Provenance, labels: list[object]) -> list[str]:
 def robust_outliers(series: dict[str, Provenance], config: dict) -> list[Anomaly]:
     rule = config["detectors"]["D1"]
     output = []
+    candidates = []
     for name, result in series.items():
+        candidates.append((name, result))
+        candidates.append((f"{name}_qoq", Provenance(result.values.pct_change(), result.fact_ids)))
+    for name, result in candidates:
         if len(result.values.dropna()) < rule["min_history"]:
             continue
         rolling = result.values.shift(1).rolling(
