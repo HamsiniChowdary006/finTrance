@@ -60,3 +60,14 @@ investment recommendation.
 5. Run `python -m agent.cli run --company <ticker> --peers P1,P2,P3 --no-llm`.
 6. Export JSON or Markdown with `--format json` or `--format md`; missing evidence is
    reported honestly as a weak/no-finding result.
+
+## P1 angles and dashboard
+
+Funding mix shares, HHI, CASA decline, concentration, and short-term-funding
+reliance are declared in [config/anomaly_rules.yaml](config/anomaly_rules.yaml).
+They run only when the required facts exist and retain the source `fact_id`s.
+Configured collection reads [config/sources.yaml](config/sources.yaml), which is
+intentionally empty until a public endpoint is captured and verified; see
+[docs/CAPTURE_ENDPOINTS.md](docs/CAPTURE_ENDPOINTS.md). Run the dashboard with
+`streamlit run app/main.py`. Synthetic fixtures are labelled and are not real
+research findings.

@@ -12,3 +12,11 @@ metrics:
   stage2_assets: {unit: "INR crore", aliases: ["stage 2 assets", "stage 2"]}
   stage3_assets: {unit: "INR crore", aliases: ["stage 3 assets", "stage 3"]}
   ecl_provisions: {unit: "INR crore", aliases: ["ecl provisions", "expected credit loss"]}
+  bank_loans: {unit: "INR crore", aliases: ["bank loans", "loans from banks"]}
+  ncd_bonds: {unit: "INR crore", aliases: ["ncds", "ncds/bonds", "bonds", "non-convertible debentures"]}
+  commercial_paper: {unit: "INR crore", aliases: ["commercial paper", "cp outstanding"]}
+  ecb: {unit: "INR crore", aliases: ["ecb", "external commercial borrowings"]}
+  deposits: {unit: "INR crore", aliases: ["public deposits", "deposits"]}
+  securitisation: {unit: "INR crore", aliases: ["securitisation", "securitization", "assigned loans"]}
+  total_borrowings: {unit: "INR crore", aliases: ["total borrowings", "borrowings"]}
+  top_lender_share: {unit: "%", aliases: ["largest lender share", "top lender share"]}

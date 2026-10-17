@@ -10,3 +10,6 @@ metrics:
   credit_cost: {unit: "%", aliases: ["credit cost"]}
   casa_deposits: {unit: "INR crore", aliases: ["casa deposits", "casa"]}
   total_deposits: {unit: "INR crore", aliases: ["total deposits", "deposits"]}
+  bank_loans: {unit: "INR crore", aliases: ["bank loans", "loans from banks"]}
+  term_deposits: {unit: "INR crore", aliases: ["term deposits", "fixed deposits"]}
+  borrowings: {unit: "INR crore", aliases: ["total borrowings", "borrowings"]}

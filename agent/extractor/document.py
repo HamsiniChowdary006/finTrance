@@ -21,7 +21,27 @@ METRICS = {
     "stage3_assets": (["stage 3 assets", "stage 3"], "INR crore"),
     "casa_deposits": (["casa deposits", "casa"], "INR crore"),
     "total_deposits": (["total deposits", "deposits"], "INR crore"),
+    "bank_loans": (["bank loans", "loans from banks"], "INR crore"),
+    "term_deposits": (["term deposits", "fixed deposits"], "INR crore"),
+    "borrowings": (["total borrowings", "borrowings"], "INR crore"),
+    "ncd_bonds": (["ncds", "ncds/bonds", "bonds", "non-convertible debentures"], "INR crore"),
+    "commercial_paper": (["commercial paper", "cp outstanding"], "INR crore"),
+    "ecb": (["ecb", "external commercial borrowings"], "INR crore"),
+    "deposits": (["public deposits", "deposits"], "INR crore"),
+    "securitisation": (["securitisation", "securitization", "assigned loans"], "INR crore"),
+    "total_borrowings": (["total borrowings", "borrowings"], "INR crore"),
+    "top_lender_share": (["largest lender share", "top lender share"], "%"),
 }
+
+
+def configured_metrics() -> dict[str, tuple[list[str], str]]:
+    metrics = dict(METRICS)
+    for path in (Path("config/metrics_bank.yaml"), Path("config/metrics_nbfc.yaml"),
+                 Path("config/metrics_other.yaml")):
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for metric, definition in payload.get("metrics", {}).items():
+            metrics[metric] = (definition.get("aliases", []), definition["unit"])
+    return metrics
 
 
 def read_document(path: str | Path) -> str:
@@ -52,7 +72,7 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual") -> list[dict[s
     if not period_match:
         return facts
     period, period_type = parse_period(period_match.group())
-    for metric, (aliases, unit) in METRICS.items():
+    for metric, (aliases, unit) in configured_metrics().items():
         alias = next((a for a in aliases if a.casefold() in text.casefold()), None)
         if not alias:
             continue
@@ -67,9 +87,21 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual") -> list[dict[s
         quote = match.group(0).strip()
         result = validate_quote_and_bounds(metric, value, quote, text)
         if result.accepted:
+            changed = bool(re.search(
+                r"\b(restated|reclassified|presentation change|one[- ]time)\b", text, re.IGNORECASE))
             facts.append({"fact_id": hashlib.sha256(f"{doc_id}:{metric}:{period}".encode()).hexdigest()[:16],
                           "ticker": ticker, "metric": metric, "value": value, "unit": unit,
                           "period": period, "period_type": period_type, "doc_id": doc_id,
                           "page": 1, "quote": quote, "extractor": "deterministic",
-                          "confidence": 0.8, "restated": False})
+                          "confidence": 0.8, "restated": changed})
     return facts
+
+
+def extract_dependency_passages(text: str, doc_id: str, page: int = 1) -> list[dict[str, object]]:
+    patterns = (
+        r"(?:top|largest)\s+(?:lender|funder)[^.]{0,180}",
+        r"(?:co-lending|co lending|partnership|group dependence)[^.]{0,180}",
+    )
+    return [{"doc_id": doc_id, "page": page, "quote": match.group(0).strip(),
+             "metric": "dependency_passage"}
+            for pattern in patterns for match in re.finditer(pattern, text, re.IGNORECASE)]

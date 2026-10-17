@@ -18,6 +18,7 @@ class SourceType(StrEnum):
     COMPANY_SITE = "company_site"
     RBI = "rbi"
     RATING = "rating"
+    RATING_RATIONALE = "rating_rationale"
     SEARCH = "search"
     MANUAL = "manual"
 

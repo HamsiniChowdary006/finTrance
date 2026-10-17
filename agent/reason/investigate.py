@@ -20,7 +20,8 @@ def investigate(hypothesis: Hypothesis, facts: list[Fact], documents: list[Docum
         if not fact:
             continue
         document = next((item for item in documents if item.doc_id == fact.doc_id), None)
-        evidence.append(EvidenceItem(claim=f"{fact.metric}={fact.value} {fact.unit}",
+        flag = " [restated/non-comparable]" if fact.restated else ""
+        evidence.append(EvidenceItem(claim=f"{fact.metric}={fact.value} {fact.unit}{flag}",
                                      doc_id=fact.doc_id, fact_id=fact.fact_id, page=fact.page,
                                      quote=fact.quote, role="supports",
                                      source_type=document.source_type.value if document else None,

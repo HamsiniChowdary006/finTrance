@@ -15,13 +15,15 @@ dependencies = [
   "PyYAML>=6",
   "tenacity>=8",
   "python-dotenv>=1.0",
+  "streamlit>=1.57",
+  "plotly>=5",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "schemas*", "store*"]
+include = ["agent*", "schemas*", "store*", "app*"]
 
 [tool.ruff]
 line-length = 100
