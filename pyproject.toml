@@ -23,7 +23,7 @@ dependencies = [
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "schemas*", "store*"]
+include = ["agent*", "schemas*", "store*", "app*"]
 
 [tool.ruff]
 line-length = 100
