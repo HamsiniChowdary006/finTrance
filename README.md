@@ -48,3 +48,15 @@ See [SECURITY.md](SECURITY.md) for secret handling, SSRF/path protections, artif
 and the five-command pre-push checklist. `python -m agent.cli run --company "runtime name"
 --no-llm` uses deterministic mode and never requires a provider key. The renderer includes no
 investment recommendation.
+
+## From files to finding
+
+1. Put public PDF, HTML, or XLSX filings under `store/manual_drop/<ticker>/`.
+2. Run `python -m agent.cli ingest --company <ticker>` to register files and extract
+   quote-validated facts.
+3. Inspect the metric-by-quarter coverage and rejected or empty files.
+4. Use the evidence-preserving CSV template in [docs/FACTS_CSV.md](docs/FACTS_CSV.md) with
+   `python -m agent.cli facts import --file facts.csv` when manual entry is necessary.
+5. Run `python -m agent.cli run --company <ticker> --peers P1,P2,P3 --no-llm`.
+6. Export JSON or Markdown with `--format json` or `--format md`; missing evidence is
+   reported honestly as a weak/no-finding result.

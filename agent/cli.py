@@ -9,6 +9,7 @@ from agent.calc.metrics import loan_growth_yoy
 from agent.calc.timeseries import quarterly_frame
 from agent.collector.manual import ManualDropSource
 from agent.extractor.document import extract_facts, read_document
+from agent.ingest import coverage, import_csv, ingest_company
 from agent.orchestrator import Orchestrator
 from agent.profiler import profile_company
 from agent.render.report import markdown
@@ -39,6 +40,14 @@ def main() -> int:
     run.add_argument("--peers", default="")
     run.add_argument("--format", choices=("md", "json"), default="md")
     run.add_argument("--no-llm", action="store_true")
+    ingest = sub.add_parser("ingest")
+    ingest.add_argument("--company", required=True)
+    ingest.add_argument("--ticker")
+    ingest.add_argument("--from-dir", default="store/manual_drop")
+    facts = sub.add_parser("facts")
+    facts_sub = facts.add_subparsers(dest="facts_command", required=True)
+    facts_import = facts_sub.add_parser("import")
+    facts_import.add_argument("--file", required=True)
     args = parser.parse_args()
     if args.command == "extract":
         profile = profile_company(args.company)
@@ -97,10 +106,29 @@ def main() -> int:
         if args.json_path:
             Path(args.json_path).write_text(json.dumps(result, default=str, indent=2), encoding="utf-8")
     elif args.command == "run":
+        peers = [item.strip() for item in args.peers.split(",") if item.strip()]
         result = Orchestrator(callback=lambda event: print(
-            f"[{event['stage']}] {event['status']}: {event['message']}")).run(args.company)
+            f"[{event['stage']}] {event['status']}: {event['message']}")).run(
+                args.company, peers=peers)
         output = result.report.model_dump_json(indent=2) if args.format == "json" else markdown(result.report)
         print(output)
+    elif args.command == "ingest":
+        store = EvidenceStore()
+        result = ingest_company(args.company, args.from_dir, args.ticker, store)
+        print(f"documents={result['documents']} facts={result['facts']} "
+              f"rejected={len(result['rejected'])} empty={len(result['empty'])}")
+        for metric, periods in coverage(store, result["ticker"]).items():
+            print(f"{metric}: " + " ".join(f"{period}={'filled' if filled else 'missing'}"
+                                           for period, filled in periods.items()))
+        for item in result["rejected"]:
+            print(f"rejected {item['file']}: {item['reason']}")
+        for item in result["empty"]:
+            print(f"no facts: {item}")
+    elif args.command == "facts":
+        result = import_csv(args.file)
+        print(f"imported={result['imported']} rejected={len(result['rejected'])}")
+        for item in result["rejected"]:
+            print(f"rejected {item['row']}: {item['reason']}")
     return 0
 
 

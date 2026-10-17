@@ -1,5 +1,6 @@
 import hashlib
 import re
+from html import unescape
 from pathlib import Path
 
 import pandas as pd
@@ -34,8 +35,9 @@ def read_document(path: str | Path) -> str:
             raise ValueError("PDF exceeds configured page limit")
         return "\n".join(pages)
     if path.suffix.casefold() in {".html", ".htm"}:
-        frame = pd.read_html(path)[0].astype(str)
-        return "\n".join(" ".join(row) for row in frame.to_numpy())
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        text = re.sub(r"<[^>]+>", " ", raw)
+        return re.sub(r"\s+", " ", unescape(text)).strip()
     if path.suffix.casefold() == ".xlsx":
         return "\n".join(" ".join(map(str, row)) for frame in pd.read_excel(path, sheet_name=None).values()
                          for row in frame.fillna("").values.tolist())
@@ -44,7 +46,9 @@ def read_document(path: str | Path) -> str:
 
 def extract_facts(text: str, ticker: str, doc_id: str = "manual") -> list[dict[str, object]]:
     facts: list[dict[str, object]] = []
-    period_match = re.search(r"(Q[1-4]\s*FY\s*20\d{2}|FY\s*20\d{2}[-/]20\d{2})", text, re.IGNORECASE)
+    period_match = re.search(
+        r"(Q[1-4]\s*FY\s*(?:20)?\d{2}|FY\s*(?:20)?\d{2}[-/]?(?:20)?\d{2})",
+        text, re.IGNORECASE)
     if not period_match:
         return facts
     period, period_type = parse_period(period_match.group())

@@ -38,3 +38,12 @@ request succeeds and its response shape is documented in `docs/DATA_SOURCES.md`.
 3. Add a complete offline `run` path over clearly labelled SYNTHETIC fixtures, then validate
    tests, lint, name/secret scans, and tracked-artifact hygiene. Real findings remain absent
    when the evidence database is empty.
+
+## P0-c completion
+
+- [x] Add root-contained manual ingestion and quote-validated CSV fact import.
+- [x] Wire stored facts through compute, scan, hypothesis, investigation, red-team, grading,
+  and rendering with explicit stage counts and skip reasons.
+- [x] Preserve deterministic no-LLM execution and honest empty-corpus output.
+- [ ] P1: verified exchange/IR collection, richer event timeline, funding-mix and dependency
+  angles, and dashboard visual polish.

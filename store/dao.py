@@ -102,6 +102,15 @@ class EvidenceStore:
                      quote=r["quote"], extractor=r["extractor"], confidence=r["confidence"],
                      restated=bool(r["restated"])) for r in rows]
 
+    def documents_for(self, ticker: str) -> list[Document]:
+        rows = self.connection.execute(
+            "SELECT * FROM documents WHERE ticker = ? ORDER BY published, doc_id", (ticker,)
+        ).fetchall()
+        return [Document(doc_id=row["doc_id"], ticker=row["ticker"],
+                         source_type=row["source_type"], title=row["title"], url=row["url"],
+                         published=row["published"], sha256=row["sha256"],
+                         local_path=row["local_path"]) for row in rows]
+
     def flag_restatements(self, ticker: str, metric: str, period: str) -> int:
         rows = self.connection.execute(
             "SELECT fact_id, value FROM facts WHERE ticker=? AND metric=? AND period=?",
