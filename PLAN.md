@@ -45,5 +45,7 @@ request succeeds and its response shape is documented in `docs/DATA_SOURCES.md`.
 - [x] Wire stored facts through compute, scan, hypothesis, investigation, red-team, grading,
   and rendering with explicit stage counts and skip reasons.
 - [x] Preserve deterministic no-LLM execution and honest empty-corpus output.
-- [ ] P1: verified exchange/IR collection, richer event timeline, funding-mix and dependency
-  angles, and dashboard visual polish.
+- [x] P1: funding mix, dependency mentions, presentation-change flags, configurable
+  collection boundaries, and a Streamlit evidence dashboard.
+- [ ] P2: open-ended anomalies, novelty scoring, and runner-up hypothesis logic.
+- [ ] P3: batch tests, broader caching, and speed profiling.

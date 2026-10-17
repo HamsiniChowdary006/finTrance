@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 import pandas as pd
 
 from agent.calc.breaks import jump_quarters
+from agent.calc.funding import eight_quarter_change, funding_hhi, funding_mix_share
 from agent.calc.metrics import (
     casa_ratio,
     credit_cost,
@@ -118,7 +119,26 @@ class Orchestrator:
                        "scheme", "reclassification", "accounting policy", "rbi restriction")
         event_doc_ids = {doc.doc_id for doc in documents
                          if any(term in doc.title.casefold() for term in break_terms)}
-        breaks = {fact.period for fact in facts if fact.doc_id in event_doc_ids}
+        breaks = {fact.period for fact in facts
+                  if fact.restated or fact.doc_id in event_doc_ids}
+        total_metric = "total_borrowings" if "total_borrowings" in frame else "borrowings"
+        if total_metric in frame:
+            total = _provenance(frame, provenance, total_metric)
+            categories = ("bank_loans", "ncd_bonds", "commercial_paper", "ecb",
+                          "deposits", "securitisation", "term_deposits")
+            shares = {category: funding_mix_share(_provenance(frame, provenance, category), total)
+                      for category in categories if category in frame}
+            if shares:
+                data["funding_shares"] = shares
+                data["funding_hhi"] = funding_hhi(shares)
+                for category, result in shares.items():
+                    data[f"{category}_share"] = result
+                    if category == "commercial_paper":
+                        data["commercial_paper_share"] = result
+        if "casa_ratio" in data:
+            data["casa_ratio_change"] = eight_quarter_change(data["casa_ratio"])
+        if "top_lender_share" in frame:
+            data["top_lender_share"] = _provenance(frame, provenance, "top_lender_share")
         if breaks:
             for result in data.values():
                 result.values.loc[result.values.index.isin(breaks)] = float("nan")

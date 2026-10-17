@@ -1,0 +1,3 @@
+# User-editable source definitions. Leave empty until an endpoint is captured
+# and verified with browser DevTools. Never paste cookies, tokens, or personal data.
+sources: []

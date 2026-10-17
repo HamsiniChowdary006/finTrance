@@ -11,6 +11,8 @@ SUPPORTED = {".pdf", ".html", ".htm", ".xlsx"}
 
 def source_title_type(path: Path) -> SourceType:
     title = path.stem.casefold()
+    if "rationale" in title:
+        return SourceType.RATING_RATIONALE
     if "rating" in title or "credit" in title:
         return SourceType.RATING
     if "rbi" in title or "regulatory" in title:

@@ -9,6 +9,18 @@ R3:
 R4:
   pcr_drop: 5.0
   quarters: 6
+R5:
+  shift_points: 10.0
+  quarters: 8
+R6:
+  decline_points: 5.0
+  quarters: 4
+R7:
+  hhi_threshold: 0.25
+  top_lender_share: 25.0
+R10:
+  short_term_share_rise: 5.0
+  loan_growth_min: 0.20
 breaks:
   jump_threshold: 0.15
   cusum_sensitivity: 2.0
