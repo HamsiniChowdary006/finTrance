@@ -1,5 +1,13 @@
 # P0-a Foundation Plan
 
+## One-command launcher
+
+The root `run_demo.py` provides a fresh-clone workflow for manual-drop filings.
+It supports dry-run planning, deterministic no-LLM fallback, SHA-256 idempotent
+ingestion, per-company reports in `out/`, labelled synthetic validation, ordered
+checks, free-port selection, and clean dashboard shutdown. Real-data output
+remains unavailable until public filings are placed in `store/manual_drop/`.
+
 1. Scaffold a Python 3.11+ package, configuration, storage, tests, and documentation layout.
 2. Define typed domain schemas and an evidence-first SQLite DAO.
 3. Implement deterministic period/unit/quote/bounds/alias validators before any LLM use.

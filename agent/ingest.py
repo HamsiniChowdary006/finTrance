@@ -23,7 +23,8 @@ def source_title_type(path: Path) -> SourceType:
 
 
 def ingest_company(company: str, root: str | Path = "store/manual_drop",
-                   ticker: str | None = None, store: EvidenceStore | None = None) -> dict:
+                   ticker: str | None = None, store: EvidenceStore | None = None,
+                   reingest: bool = False) -> dict:
     store = store or EvidenceStore()
     ticker = ticker or company
     root_path = Path(root).resolve()
@@ -37,6 +38,12 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
         doc_id = digest[:16]
+        existing = store.connection.execute(
+            "SELECT sha256 FROM documents WHERE ticker=? AND local_path=?",
+            (ticker, str(path)),
+        ).fetchone()
+        if existing and existing["sha256"] == digest and not reingest:
+            continue
         document = Document(doc_id=doc_id, ticker=ticker, source_type=source_title_type(path),
                             title=path.name, sha256=digest, local_path=str(path))
         store.insert_document(document)

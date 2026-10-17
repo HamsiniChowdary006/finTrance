@@ -25,6 +25,9 @@ dev = ["pytest>=8", "ruff>=0.6"]
 [tool.setuptools.packages.find]
 include = ["agent*", "schemas*", "store*", "app*"]
 
+[tool.setuptools]
+py-modules = ["run_demo"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
