@@ -12,12 +12,18 @@ import pandas as pd
 import yaml
 
 from agent.extractor.pdf_parse import extract_target_pages
-from agent.extractor.validators import normalise_amount, parse_period, validate_quote_and_bounds
+from agent.extractor.validators import (
+    normalise_amount,
+    parse_period,
+    period_key,
+    validate_quote_and_bounds,
+    validate_value_context,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 METRICS = {
-    "gross_advances": (["gross advances", "loan book", "aum", "assets under management"], "INR crore"),
+    "gross_advances": (["gross advances", "advances"], "INR crore"),
     "gross_npa": (["gross npa", "gross npas", "gross non-performing assets"], "INR crore"),
     "net_npa": (["net npa", "net npas", "net non-performing assets"], "INR crore"),
     "gnpa_pct": (["gnpa %", "gross npa %", "gross npa ratio",
@@ -26,7 +32,9 @@ METRICS = {
                   "% of net npas to net advances"], "%"),
     "write_offs": (["write offs", "write-offs"], "INR crore"),
     "provisions_on_npa": (["provisions on npa", "npa provisions",
-                            "provisions (other than tax) and contingencies"], "INR crore"),
+                            "provision coverage stock"], "INR crore"),
+    "provisions_expense": (["provisions (other than tax) and contingencies",
+                            "provisions other than tax"], "INR crore"),
     "stage2_assets": (["stage 2 assets", "stage 2"], "INR crore"),
     "stage3_assets": (["stage 3 assets", "stage 3"], "INR crore"),
     "casa_deposits": (["casa deposits", "casa"], "INR crore"),
@@ -51,9 +59,8 @@ def configured_metrics() -> dict[str, tuple[list[str], str]]:
                  Path("config/metrics_other.yaml")):
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for metric, definition in payload.get("metrics", {}).items():
-            current_aliases, _ = metrics.get(metric, ([], definition["unit"]))
-            aliases = list(dict.fromkeys(current_aliases + definition.get("aliases", [])))
-            metrics[metric] = (aliases, definition["unit"])
+            if metric not in metrics:
+                metrics[metric] = (definition.get("aliases", []), definition["unit"])
     return metrics
 
 
@@ -150,15 +157,29 @@ def _alias_match(text: str, alias: str) -> re.Match[str] | None:
 
 def extract_facts(text: str, ticker: str, doc_id: str = "manual",
                   period_hint: str | None = None, page: int = 1,
-                  diagnostics: dict[str, object] | None = None) -> list[dict[str, object]]:
+                  diagnostics: dict[str, object] | None = None,
+                  max_period: str | None = None,
+                  basis: str = "unknown") -> list[dict[str, object]]:
     facts: list[dict[str, object]] = []
     period_match = re.search(
         r"(Q[1-4]\s*FY\s*(?:20)?\d{2}|FY\s*(?:20)?\d{2}[-/]?(?:20)?\d{2})",
         text, re.IGNORECASE)
-    period_match = period_match or (re.match(r".*", period_hint or "") if period_hint else None)
+    period_match = (re.match(r".*", period_hint or "") if period_hint else period_match)
     if not period_match:
         return facts
+    if basis == "unknown":
+        lower_text = text.casefold()
+        if re.search(r"\b(segment|subsidiary|associate)\b", lower_text):
+            basis = "segment" if "segment" in lower_text else "subsidiary"
+        elif re.search(r"\bstandalone\b", lower_text):
+            basis = "standalone"
+        elif re.search(r"\bconsolidated\b", lower_text):
+            basis = "consolidated"
     period, period_type = parse_period(period_match.group() if period_match else period_hint or "")
+    if max_period and period_key(period) > period_key(max_period):
+        if diagnostics is not None:
+            diagnostics.setdefault("rejected", []).append(f"{period}:after latest {max_period}")
+        return facts
     alias_hits = set(diagnostics.get("aliases_matched", []) if diagnostics else [])
     skipped: list[str] = []
     for metric, (aliases, unit) in configured_metrics().items():
@@ -169,7 +190,17 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         alias, matched = alias_match
         alias_hits.add(alias)
         start = matched.end()
-        window = text[start:start + 60]
+        line_start = text.rfind("\n", 0, matched.start()) + 1
+        line_end = text.find("\n", start)
+        line_end = len(text) if line_end < 0 else line_end
+        line = text[line_start:line_end]
+        next_end = text.find("\n", line_end + 1)
+        adjacent = text[line_end + 1:(len(text) if next_end < 0 else next_end)]
+        window = line[line.find(matched.group(0)) + len(matched.group(0)):] + "\n" + adjacent
+        if re.search(r"\b(?:growth|yoy|qoq|as a %|ratio|per share|eps)\b", line, re.IGNORECASE):
+            if diagnostics is not None:
+                diagnostics.setdefault("rejected", []).append(f"{metric}:context")
+            continue
         candidate = None
         value = None
         for possible in re.finditer(r"(?<!\w)-?(?:\d[\d,.]*)(?!\w)", window):
@@ -191,13 +222,22 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         if not candidate or value is None:
             skipped.append(f"{metric}:{alias}:no numeric token")
             continue
-        unit_match = re.search(r"(lakh|crore|million|billion|%)", window[candidate.end():],
+        unit_match = re.search(r"(lakh\s+crore|trn|tn|trillion|bn|mn|lakh|crore|million|billion|%)",
+                               window[candidate.end():],
                                re.IGNORECASE)
-        raw_unit = unit_match.group(1) if unit_match else unit
-        if raw_unit != "%" and unit == "INR crore":
+        detected_unit = unit_match.group(1) if unit_match else ""
+        raw_unit = detected_unit or unit
+        if detected_unit != "%" and unit == "INR crore":
             value = normalise_amount(value, raw_unit)
-        quote = text[matched.start():start + candidate.end() +
-                     (unit_match.end() if unit_match else 0)].strip()
+        quote = (line + ("\n" + adjacent if candidate.end() > len(line) -
+                         (line.find(matched.group(0)) + len(matched.group(0))) else "")).strip()
+        quote = quote[:quote.find("\n") + 1 + candidate.end()] if "\n" in quote else quote
+        valid, statuses, reason = validate_value_context(
+            metric, candidate.group(0), quote, detected_unit, alias)
+        if not valid:
+            if diagnostics is not None:
+                diagnostics.setdefault("rejected", []).append(f"{metric}:{reason}")
+            continue
         result = validate_quote_and_bounds(metric, value, quote, text)
         if result.accepted:
             changed = bool(re.search(
@@ -208,6 +248,9 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
                 "period": period, "period_type": period_type, "doc_id": doc_id,
                 "page": page, "quote": quote, "extractor": "deterministic",
                 "confidence": 0.8, "restated": changed})
+            facts[-1]["normalized_value"] = value
+            facts[-1]["basis"] = basis
+            facts[-1]["validator_status"] = statuses | {"bounds": True, "quote": True}
     if diagnostics is not None:
         diagnostics["aliases_matched"] = sorted(alias_hits)
         diagnostics["skipped_tokens"] = skipped

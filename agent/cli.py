@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from agent.calc.metrics import loan_growth_yoy
 from agent.calc.timeseries import quarterly_frame
 from agent.collector.manual import ManualDropSource
 from agent.extractor.document import extract_facts, read_document_pages
+from agent.extractor.validators import period_key
 from agent.ingest import coverage, import_csv, ingest_company
 from agent.orchestrator import Orchestrator
 from agent.profiler import profile_company
@@ -23,6 +25,84 @@ CORE_METRICS = (
     "write_offs", "provisions_on_npa", "stage2_assets", "stage3_assets",
     "casa_deposits", "total_deposits",
 )
+
+
+def write_golden(args) -> None:
+    store = EvidenceStore()
+    start_key, end_key = period_key(args.from_period), period_key(args.to_period)
+    facts = [fact for fact in store.facts_for(args.ticker)
+             if start_key <= period_key(fact.period) <= end_key and
+             not fact.conflict and not fact.suspect and
+             all(fact.validator_status.values())]
+    wanted = [item.strip() for item in args.metrics.split(",") if item.strip()]
+    periods = []
+    for year in range(start_key[0], end_key[0] + 1):
+        for quarter in range(1, 5):
+            period = f"Q{quarter}FY{year}"
+            if start_key <= period_key(period) <= end_key:
+                periods.append(period)
+    documents = {doc.doc_id: doc for doc in store.documents_for(args.ticker)}
+    priority = {"exchange": 0, "manual": 0, "company_site": 1, "rating": 1}
+    output = Path(args.out)
+    repo_out = Path("out").resolve()
+    if repo_out not in output.resolve().parents:
+        raise ValueError("golden output must be under out/")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for metric in wanted:
+        metric_name = "casa_deposits" if metric.casefold() == "casa ratio" else metric
+        for period in periods:
+            candidates = [fact for fact in facts
+                          if fact.metric == metric_name and fact.period == period]
+            candidates.sort(key=lambda fact: priority.get(
+                documents[fact.doc_id].source_type.value, 9))
+            fact = candidates[0] if candidates else None
+            if metric.casefold() == "casa ratio":
+                casa = next((item for item in facts if item.metric == "casa_deposits"
+                             and item.period == period), None)
+                deposits = next((item for item in facts if item.metric == "total_deposits"
+                                 and item.period == period), None)
+                if casa and deposits:
+                    rows.append({"metric": metric, "period": period,
+                                 "normalized_value": casa.value / deposits.value * 100,
+                                 "unit": "%", "basis": casa.basis,
+                                 "source_file": documents[casa.doc_id].local_path,
+                                 "page": casa.page, "quote": casa.quote,
+                                 "validators_passed": "derived", "conflict": False})
+                    continue
+            if metric.casefold() == "credit_cost" and not fact:
+                provisions = next((item for item in facts
+                                   if item.metric == "provisions_expense" and item.period == period), None)
+                writeoffs = next((item for item in facts
+                                  if item.metric == "write_offs" and item.period == period), None)
+                advances = next((item for item in facts
+                                 if item.metric == "gross_advances" and item.period == period), None)
+                if provisions and advances:
+                    numerator = provisions.value + (writeoffs.value if writeoffs else 0)
+                    rows.append({
+                        "metric": metric, "period": period,
+                        "normalized_value": numerator * 4 / advances.value * 100,
+                        "unit": "%", "basis": provisions.basis,
+                        "source_file": documents[provisions.doc_id].local_path,
+                        "page": provisions.page,
+                        "quote": provisions.quote + (f" | {writeoffs.quote}" if writeoffs else ""),
+                        "validators_passed": "derived",
+                        "conflict": False,
+                    })
+                    continue
+            rows.append({"metric": metric, "period": period,
+                         "normalized_value": fact.normalized_value if fact else "",
+                         "unit": fact.unit if fact else "", "basis": fact.basis if fact else "",
+                         "source_file": documents[fact.doc_id].local_path if fact else "",
+                         "page": fact.page if fact else "", "quote": fact.quote if fact else "MISSING",
+                         "validators_passed": ",".join(k for k, v in fact.validator_status.items()
+                                                       if v) if fact else "MISSING",
+                         "conflict": fact.conflict if fact else False})
+    with output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else
+                                ["metric", "period", "normalized_value"])
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def main() -> int:
@@ -46,6 +126,8 @@ def main() -> int:
     ingest.add_argument("--company", required=True)
     ingest.add_argument("--ticker")
     ingest.add_argument("--from-dir", default="store/manual_drop")
+    ingest.add_argument("--reingest", action="store_true")
+    ingest.add_argument("--no-llm", action="store_true")
     facts = sub.add_parser("facts")
     facts_sub = facts.add_subparsers(dest="facts_command", required=True)
     facts_import = facts_sub.add_parser("import")
@@ -53,6 +135,14 @@ def main() -> int:
     facts_audit = facts_sub.add_parser("audit")
     facts_audit.add_argument("--ticker", required=True)
     facts_audit.add_argument("--sample", type=int, default=10)
+    facts_audit.add_argument("--only-failing", action="store_true")
+    facts_audit.add_argument("--metric")
+    facts_golden = facts_sub.add_parser("golden")
+    facts_golden.add_argument("--ticker", required=True)
+    facts_golden.add_argument("--metrics", required=True)
+    facts_golden.add_argument("--from", dest="from_period", required=True)
+    facts_golden.add_argument("--to", dest="to_period", required=True)
+    facts_golden.add_argument("--out", required=True)
     args = parser.parse_args()
     if args.command == "extract":
         profile = profile_company(args.company)
@@ -88,7 +178,7 @@ def main() -> int:
         if frame.empty:
             print("no real facts available; synthetic validation only")
             result = {"company": args.company, "quarters": [], "anomalies": [], "top3": []}
-        else:
+        elif args.facts_command == "audit":
             frame = frame.tail(12)
             print(frame.to_string())
             from agent.calc.timeseries import Provenance
@@ -122,7 +212,8 @@ def main() -> int:
         print(output)
     elif args.command == "ingest":
         store = EvidenceStore()
-        result = ingest_company(args.company, args.from_dir, args.ticker, store)
+        result = ingest_company(args.company, args.from_dir, args.ticker, store,
+                                reingest=args.reingest)
         print(f"documents={result['documents']} facts={result['facts']} "
               f"rejected={len(result['rejected'])} empty={len(result['empty'])}")
         for metric, periods in coverage(store, result["ticker"]).items():
@@ -141,13 +232,21 @@ def main() -> int:
                   f"aliases={','.join(item.get('aliases_matched', [])) or '-'} "
                   f"ocr_pages={item.get('ocr_pages', 0)} facts={item.get('facts', 0)}")
         print(f"events={result.get('events', 0)}")
+        print(f"validator_rejections={result.get('validator_rejections', 0)}")
+        for item in result.get("duplicate_files", []):
+            print(f"duplicate: {item}")
+        if result.get("image_only_files"):
+            print("WARNING image-only files skipped (OCR unavailable): " +
+                  ", ".join(result["image_only_files"]))
     elif args.command == "facts":
         if args.facts_command == "import":
             result = import_csv(args.file)
             print(f"imported={result['imported']} rejected={len(result['rejected'])}")
             for item in result["rejected"]:
                 print(f"rejected {item['row']}: {item['reason']}")
-        else:
+        elif args.facts_command == "golden":
+            write_golden(args)
+        elif args.facts_command == "audit":
             import random
             store = EvidenceStore()
             facts = store.facts_for(args.ticker)
@@ -160,9 +259,15 @@ def main() -> int:
             for metric, periods in sorted(by_metric.items()):
                 print(f"{metric}: {len(periods)} periods")
             print(f"facts={len(facts)} events={len(store.events_for(args.ticker))}")
-            for fact in random.Random(args.ticker).sample(facts, min(args.sample, len(facts))):
+            selected = [fact for fact in facts
+                        if (not args.metric or fact.metric == args.metric) and
+                        (not args.only_failing or not all(fact.validator_status.values()))]
+            selected = random.Random(args.ticker).sample(selected, min(args.sample, len(selected)))
+            for fact in selected:
                 print(f"{fact.metric} {fact.period} value={fact.value} unit={fact.unit} "
-                      f"page={fact.page} quote={fact.quote}")
+                      f"normalized={fact.normalized_value} basis={fact.basis} page={fact.page} "
+                      f"source={documents.get(fact.doc_id).local_path if fact.doc_id in documents else '-'} "
+                      f"quote={fact.quote} validators={fact.validator_status}")
             mismatches = []
             for fact in facts:
                 document = documents.get(fact.doc_id)

@@ -85,6 +85,8 @@ class Orchestrator:
                                   status="running", log_json={}))
         facts = self.store.facts_for(ticker)
         documents = self.store.documents_for(ticker)
+        metric_errors: list[str] = []
+        rule_errors: list[str] = []
         self._emit("PROFILE", "completed", "profile resolved from stored evidence",
                    {"facts": len(facts), "documents": len(documents)}, started)
         self._emit("COLLECT", "skipped" if not documents else "completed",
@@ -98,13 +100,19 @@ class Orchestrator:
         data: dict = {}
         if not frame.empty and "gross_advances" in frame:
             advances = _provenance(frame, provenance, "gross_advances")
-            data["loan_growth_yoy"] = loan_growth_yoy(advances)
+            def compute(name, function, *args):
+                try:
+                    data[name] = function(*args)
+                except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+                    metric_errors.append(f"{name}: {error}")
+
+            compute("loan_growth_yoy", loan_growth_yoy, advances)
             if "stage3_assets" in frame:
-                data["stress"] = stage3_pct(_provenance(frame, provenance, "stage3_assets"), advances)
+                compute("stress", stage3_pct, _provenance(frame, provenance, "stage3_assets"), advances)
             elif "gnpa_pct" in frame:
                 data["stress"] = _provenance(frame, provenance, "gnpa_pct")
             elif "gross_npa" in frame:
-                data["stress"] = gnpa_pct(_provenance(frame, provenance, "gross_npa"), advances)
+                compute("stress", gnpa_pct, _provenance(frame, provenance, "gross_npa"), advances)
             if {"gross_npa", "write_offs"} <= set(frame.columns):
                 gnpa = (_provenance(frame, provenance, "gnpa_pct") if "gnpa_pct" in frame
                         else gnpa_pct(_provenance(frame, provenance, "gross_npa"), advances))
@@ -113,20 +121,23 @@ class Orchestrator:
                     _provenance(frame, provenance, "gross_npa"), advances,
                     _provenance(frame, provenance, "write_offs"))
                 data["write_offs"] = _provenance(frame, provenance, "write_offs")
-            if {"provisions_on_npa", "write_offs"} <= set(frame.columns):
-                data["credit_cost"] = credit_cost(
-                    _provenance(frame, provenance, "provisions_on_npa"),
+            if {"provisions_expense", "write_offs"} <= set(frame.columns):
+                compute("credit_cost", credit_cost,
+                    _provenance(frame, provenance, "provisions_expense"),
                     _provenance(frame, provenance, "write_offs"), advances)
             if {"provisions_on_npa", "gross_npa"} <= set(frame.columns):
-                data["pcr"] = pcr(_provenance(frame, provenance, "provisions_on_npa"),
-                                  _provenance(frame, provenance, "gross_npa"))
+                compute("pcr", pcr, _provenance(frame, provenance, "provisions_on_npa"),
+                        _provenance(frame, provenance, "gross_npa"))
             if {"casa_deposits", "total_deposits"} <= set(frame.columns):
-                data["casa_ratio"] = casa_ratio(_provenance(frame, provenance, "casa_deposits"),
-                                                _provenance(frame, provenance, "total_deposits"))
+                compute("casa_ratio", casa_ratio,
+                        _provenance(frame, provenance, "casa_deposits"),
+                        _provenance(frame, provenance, "total_deposits"))
         self._emit("COMPUTE", "completed" if data else "skipped",
                    "computed provenance-carrying metric series" if data
                    else "insufficient facts for derived metrics",
-                   {"quarters": len(frame), "derived_metrics": len(data)}, started)
+                   {"quarters": len(frame), "derived_metrics": len(data), "errors": len(metric_errors)}, started)
+        if metric_errors:
+            self._emit("COMPUTE", "warning", "; ".join(metric_errors), started=started)
 
         jump_candidates = set(jump_quarters(frame["gross_advances"])) if "gross_advances" in frame else set()
         break_terms = ("merger", "amalgamation", "demerger", "acquisition",
@@ -155,8 +166,15 @@ class Orchestrator:
             data["top_lender_share"] = _provenance(frame, provenance, "top_lender_share")
         if breaks:
             for result in data.values():
-                result.values.loc[result.values.index.isin(breaks)] = float("nan")
-        anomalies = evaluate_rules(data, load_rules()) if data else []
+                if hasattr(result, "fact_ids") and hasattr(result.values, "loc"):
+                    result.values.loc[result.values.index.isin(breaks)] = float("nan")
+        rule_errors: list[str] = []
+        try:
+            anomalies = evaluate_rules(data, load_rules()) if data else []
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+            anomalies = []
+            rule_errors.append(str(error))
+            self._emit("SCAN", "warning", f"rules skipped: {error}", started=started)
         open_config = load_open_ended()
         series = {name: value for name, value in data.items()
                   if hasattr(value, "values") and hasattr(value, "fact_ids")}
@@ -268,7 +286,8 @@ class Orchestrator:
                                investigation.timeline, redteam.strongest_counterargument,
                                redteam.falsification_condition, final_grade,
                                [item.model_dump() for item in ranked],
-                               hypothesis.novelty_rationale, also_considered)
+                               hypothesis.novelty_rationale, also_considered,
+                               metric_errors + rule_errors)
         self._emit("RENDER", "completed", "report rendered with evidence filter",
                    {"evidence": len(report.evidence), "anomalies": len(report.anomalies)}, started)
         self.store.connection.execute("UPDATE runs SET status=?, log_json=? WHERE run_id=?",

@@ -103,9 +103,27 @@ Inspect stored evidence with:
 python -m agent.cli facts audit --ticker HDFCBANK --sample 10
 ```
 
-The audit prints sampled metric/period/value/unit/page/quote rows, coverage,
-events, and every quote that no longer matches its registered source page.
+Use `--only-failing` and `--metric METRIC` to narrow the audit. It prints
+normalized value, basis, source file, validator results, coverage, events, and
+every quote that no longer matches its registered source page. Export a
+human-verification table without interpolation with:
+
+```text
+python -m agent.cli facts golden --ticker HDFCBANK \
+  --metrics gross_advances,gross_npa,gnpa_pct,net_npa,nnpa_pct,slippages,write_offs,credit_cost,"casa ratio",total_deposits \
+  --from Q2FY24 --to Q1FY27 --out out/golden_HDFCBANK.csv
+```
+
+Rows without a validated fact are marked `MISSING`; conflicts and suspect
+quarter-on-quarter jumps are excluded from the table.
 Merger/FAQ documents are registered as events and are not fact-extracted.
+
+OCR is optional. On Windows install Tesseract from the official UB Mannheim
+build and ensure `tesseract.exe` is on `PATH`; on Debian/Ubuntu use
+`sudo apt install tesseract-ocr`. The Python OCR adapter is only invoked for
+image-only pages, is bounded by the ingest timeout, and never blocks the
+remaining documents. When no executable is available, ingestion prints the
+image-only filenames that were skipped.
 
 ## P1 angles and dashboard
 

@@ -13,7 +13,10 @@ CREATE TABLE IF NOT EXISTS facts (
  fact_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, metric TEXT NOT NULL, value REAL NOT NULL,
  unit TEXT NOT NULL, period TEXT NOT NULL, period_type TEXT NOT NULL, doc_id TEXT NOT NULL,
  page INTEGER NOT NULL, quote TEXT NOT NULL, extractor TEXT NOT NULL,
- confidence REAL NOT NULL, restated INTEGER NOT NULL DEFAULT 0
+ confidence REAL NOT NULL, restated INTEGER NOT NULL DEFAULT 0,
+ normalized_value REAL, basis TEXT NOT NULL DEFAULT 'unknown',
+ validator_json TEXT NOT NULL DEFAULT '{}', conflict INTEGER NOT NULL DEFAULT 0,
+ suspect INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS claims (
  claim_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, text TEXT NOT NULL,
@@ -46,6 +49,17 @@ class EvidenceStore:
         self.connection = sqlite3.connect(self.path)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        for statement in (
+            "ALTER TABLE facts ADD COLUMN normalized_value REAL",
+            "ALTER TABLE facts ADD COLUMN basis TEXT NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE facts ADD COLUMN validator_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE facts ADD COLUMN conflict INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE facts ADD COLUMN suspect INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                self.connection.execute(statement)
+            except sqlite3.OperationalError:
+                pass
         self.connection.commit()
 
     def insert_document(self, document: Document) -> None:
@@ -59,11 +73,35 @@ class EvidenceStore:
 
     def insert_fact(self, fact: Fact) -> None:
         self.connection.execute(
-            "INSERT OR REPLACE INTO facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            """INSERT OR REPLACE INTO facts
+            (fact_id,ticker,metric,value,unit,period,period_type,doc_id,page,quote,
+             extractor,confidence,restated,normalized_value,basis,validator_json,conflict,suspect)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (fact.fact_id, fact.ticker, fact.metric, fact.value, fact.unit, fact.period,
              fact.period_type.value, fact.doc_id, fact.page, fact.quote, fact.extractor,
-             fact.confidence, int(fact.restated)),
+             fact.confidence, int(fact.restated), fact.normalized_value, fact.basis,
+             json.dumps(fact.validator_status), int(fact.conflict), int(fact.suspect)),
         )
+        self.connection.commit()
+
+    def update_fact_flags(self, fact_ids: list[str], *, conflict: bool | None = None,
+                          suspect: bool | None = None) -> None:
+        if not fact_ids:
+            return
+        assignments = []
+        values: list[object] = []
+        if conflict is not None:
+            assignments.append("conflict=?")
+            values.append(int(conflict))
+        if suspect is not None:
+            assignments.append("suspect=?")
+            values.append(int(suspect))
+        if not assignments:
+            return
+        values.extend([fact_id for fact_id in fact_ids])
+        self.connection.execute(
+            f"UPDATE facts SET {', '.join(assignments)} WHERE fact_id IN "
+            f"({','.join('?' for _ in fact_ids)})", values)
         self.connection.commit()
 
     def insert_run(self, run: Run) -> None:
@@ -125,7 +163,10 @@ class EvidenceStore:
                      value=r["value"], unit=r["unit"], period=r["period"],
                      period_type=r["period_type"], doc_id=r["doc_id"], page=r["page"],
                      quote=r["quote"], extractor=r["extractor"], confidence=r["confidence"],
-                     restated=bool(r["restated"])) for r in rows]
+                     restated=bool(r["restated"]),
+                     normalized_value=r["normalized_value"], basis=r["basis"],
+                     validator_status=json.loads(r["validator_json"] or "{}"),
+                     conflict=bool(r["conflict"]), suspect=bool(r["suspect"])) for r in rows]
 
     def documents_for(self, ticker: str) -> list[Document]:
         rows = self.connection.execute(

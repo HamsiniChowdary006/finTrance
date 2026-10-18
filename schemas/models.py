@@ -75,6 +75,11 @@ class Fact(BaseModel):
     extractor: str
     confidence: float = Field(ge=0, le=1)
     restated: bool = False
+    normalized_value: float | None = None
+    basis: str = "unknown"
+    validator_status: dict[str, bool] = Field(default_factory=dict)
+    conflict: bool = False
+    suspect: bool = False
 
 
 class Event(BaseModel):

@@ -6,3 +6,18 @@ grader:
   moderate_min: 4
   stability_points: 1
   agreement_points: 1
+validation:
+  minimum_amount_without_unit: 10
+  qoq_jump_suspect: 0.5
+  reconciliation_tolerance: 0.05
+  preferred_basis:
+    bank: standalone
+    nbfc: consolidated
+    housing_fin: consolidated
+    other_fin: consolidated
+  source_priority:
+    exchange: 0
+    company_site: 1
+    rating: 2
+    rating_rationale: 2
+    manual: 3

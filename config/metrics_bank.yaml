@@ -1,10 +1,11 @@
 metrics:
-  gross_advances: {unit: "INR crore", aliases: ["gross advances", "loan book", "advances"]}
+  gross_advances: {unit: "INR crore", aliases: ["gross advances", "advances"]}
   gross_npa: {unit: "INR crore", aliases: ["gross npa", "gross npas", "gross non-performing assets"]}
   net_npa: {unit: "INR crore", aliases: ["net npa", "net npas", "net non-performing assets"]}
   gnpa_pct: {unit: "%", aliases: ["gnpa %", "gross npa %", "gross npa ratio", "% of gross npas to gross advances", "% of gross npa to gross advances"]}
   nnpa_pct: {unit: "%", aliases: ["nnpa %", "net npa %", "net npa ratio", "% of net npas to net advances", "% of net npa to net advances"]}
-  provisions_on_npa: {unit: "INR crore", aliases: ["provisions on npa", "npa provisions", "provisions (other than tax) and contingencies", "provisions other than tax"]}
+  provisions_expense: {unit: "INR crore", aliases: ["provisions (other than tax) and contingencies", "provisions other than tax"]}
+  provisions_on_npa: {unit: "INR crore", aliases: ["provisions on npa", "npa provisions", "provision coverage stock"]}
   slippages: {unit: "INR crore", aliases: ["slippages", "fresh slippages"]}
   write_offs: {unit: "INR crore", aliases: ["write offs", "write-offs"]}
   credit_cost: {unit: "%", aliases: ["credit cost"]}
