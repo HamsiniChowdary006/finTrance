@@ -14,7 +14,12 @@ class Provenance:
 
 
 def quarterly_frame(facts: Iterable[Fact]) -> tuple[pd.DataFrame, dict[object, dict[str, list[str]]]]:
-    rows = list(facts)
+    rows = [fact for fact in facts if not fact.conflict and not fact.suspect]
+    # Prefer entity-level standalone facts; fall back to consolidated only when
+    # no standalone fact exists for a metric and period.
+    standalone_keys = {(fact.period, fact.metric) for fact in rows if fact.basis == "standalone"}
+    rows = [fact for fact in rows
+            if fact.basis != "consolidated" or (fact.period, fact.metric) not in standalone_keys]
     selected: dict[tuple[str, str], Fact] = {}
     for fact in rows:
         key = (fact.period, fact.metric)

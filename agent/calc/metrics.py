@@ -49,8 +49,14 @@ def slippage_ratio(slippages: Provenance, opening_advances: Provenance) -> Metri
 def credit_cost(provisions: Provenance, write_offs: Provenance, advances: Provenance) -> MetricResult:
     """Credit cost = annualised provisions plus write-offs / average advances * 100."""
     avg = average_balance(advances.values, advances.fact_ids)
-    numerator = annualise(Provenance(provisions.values + write_offs.values, {})).values
-    return _result(numerator / avg.values * 100, provisions, write_offs, advances)
+    numerator_values = provisions.values.add(write_offs.values, fill_value=0)
+    numerator_ids = {
+        label: sorted(set(provisions.fact_ids.get(label, []) +
+                          write_offs.fact_ids.get(label, [])))
+        for label in numerator_values.index
+    }
+    numerator = annualise(numerator_values, numerator_ids)
+    return _result(numerator.values / avg.values * 100, provisions, write_offs, advances)
 
 
 def writeoff_adjusted_gnpa(gross_npa: Provenance, advances: Provenance,

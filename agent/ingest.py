@@ -1,8 +1,12 @@
 import hashlib
+import itertools
 import re
 from pathlib import Path
 
+import yaml
+
 from agent.extractor.document import extract_facts, read_document_pages
+from agent.extractor.validators import parse_period, period_key
 from agent.security import safe_path
 from schemas.models import Document, Event, Fact, PeriodType, SourceType
 from store.dao import EvidenceStore
@@ -38,6 +42,20 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
     inserted = 0
     diagnostics: list[dict[str, object]] = []
     events = 0
+    periods = []
+    for path in files:
+        match = re.search(r"Q[1-4]FY(?:20)?\d{2}|FY(?:20)?\d{2}(?:[-/]?(?:20)?\d{2})?",
+                          path.stem, re.IGNORECASE)
+        if match:
+            try:
+                periods.append(parse_period(match.group())[0])
+            except ValueError:
+                pass
+    latest_period = max(periods, key=period_key) if periods else None
+    duplicate_files: list[str] = []
+    image_only_files: list[str] = []
+    seen_text_hashes: dict[str, str] = {}
+    inserted_facts: list[Fact] = []
     for path in files:
         content = path.read_bytes()
         digest = hashlib.sha256(content).hexdigest()
@@ -47,6 +65,13 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             (ticker, str(path)),
         ).fetchone()
         if existing and existing["sha256"] == digest and not reingest:
+            continue
+        duplicate = store.connection.execute(
+            "SELECT local_path FROM documents WHERE ticker=? AND sha256=? AND local_path<>?",
+            (ticker, digest, str(path)),
+        ).fetchone()
+        if duplicate:
+            duplicate_files.append(f"{path} duplicates {duplicate['local_path']}")
             continue
         if existing:
             old_document = store.connection.execute(
@@ -66,8 +91,18 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
                 r"Q[1-4]FY(?:20)?\d{2}|FY(?:20)?\d{2}(?:[-/]?(?:20)?\d{2})?",
                 path.stem, re.IGNORECASE)), None)
             pages = read_document_pages(path, file_diagnostics, ocr_seconds=ocr_seconds)
+            if file_diagnostics.get("ocr_error") and not any(text.strip() for _, text in pages):
+                image_only_files.append(str(path))
             file_diagnostics["chars"] = sum(len(text) for _, text in pages)
             full_text = "\n".join(text for _, text in pages)
+            text_digest = hashlib.sha256(re.sub(r"\s+", " ", full_text).strip().encode()).hexdigest()
+            if full_text.strip() and text_digest in seen_text_hashes:
+                duplicate_files.append(f"{path} duplicates extracted text {seen_text_hashes[text_digest]}")
+                store.delete_document_evidence(doc_id)
+                diagnostics.append(file_diagnostics)
+                continue
+            if full_text.strip():
+                seen_text_hashes[text_digest] = str(path)
             if any(term in path.stem.casefold() for term in EVENT_TERMS):
                 event_text = next((text for _, text in pages
                                    if any(term in text.casefold() for term in EVENT_TERMS)),
@@ -83,7 +118,7 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             extracted = []
             for page_number, text in pages:
                 extracted.extend(extract_facts(text, ticker, doc_id, period_hint,
-                                                page_number, file_diagnostics))
+                                                page_number, file_diagnostics, latest_period))
             file_diagnostics["facts"] = len(extracted)
             diagnostics.append(file_diagnostics)
         except (OSError, ValueError, RuntimeError) as error:
@@ -94,11 +129,49 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             empty.append(str(path))
         for item in extracted:
             item["period_type"] = PeriodType(item["period_type"])
-            store.insert_fact(Fact.model_validate(item))
+            fact = Fact.model_validate(item)
+            store.insert_fact(fact)
+            inserted_facts.append(fact)
             inserted += 1
+    _flag_reconciliation(store, ticker, inserted_facts)
     return {"ticker": ticker, "documents": len(files), "facts": inserted,
             "rejected": rejected, "empty": empty, "diagnostics": diagnostics,
-            "events": events}
+            "events": events, "duplicate_files": duplicate_files,
+            "image_only_files": image_only_files,
+            "validator_rejections": sum(len(item.get("rejected", [])) for item in diagnostics)}
+
+
+def _flag_reconciliation(store: EvidenceStore, ticker: str, facts: list[Fact]) -> None:
+    if not facts:
+        return
+    thresholds = yaml.safe_load(Path("config/thresholds.yaml").read_text(encoding="utf-8")) or {}
+    validation = thresholds.get("validation", {})
+    tolerance = float(validation.get("reconciliation_tolerance", 0.05))
+    jump_limit = float(validation.get("qoq_jump_suspect", 0.5))
+    documents = {doc.doc_id: doc for doc in store.documents_for(ticker)}
+    grouped: dict[tuple[str, str], list[Fact]] = {}
+    for fact in facts:
+        grouped.setdefault((fact.metric, fact.period), []).append(fact)
+    for group in grouped.values():
+        values = [fact.normalized_value if fact.normalized_value is not None else fact.value
+                  for fact in group]
+        if len(values) > 1 and max(values) - min(values) > tolerance * max(abs(max(values)), 1):
+            store.update_fact_flags([fact.fact_id for fact in group], conflict=True)
+    by_metric = {}
+    for fact in facts:
+        by_metric.setdefault(fact.metric, []).append(fact)
+    for metric_facts in by_metric.values():
+        ordered = sorted(metric_facts, key=lambda fact: period_key(fact.period))
+        for previous, current in itertools.pairwise(ordered):
+            old = previous.normalized_value if previous.normalized_value is not None else previous.value
+            new = current.normalized_value if current.normalized_value is not None else current.value
+            if old and abs(new / old - 1) > jump_limit:
+                same_period_sources = {
+                    documents[item.doc_id].source_type.value for item in metric_facts
+                    if item.period == current.period and item.doc_id in documents
+                }
+                if len(same_period_sources) < 2:
+                    store.update_fact_flags([current.fact_id], suspect=True)
 
 
 def import_csv(path: str | Path, store: EvidenceStore | None = None) -> dict:

@@ -51,3 +51,4 @@ class RenderedReport(BaseModel):
     anomalies: list[dict] = Field(default_factory=list)
     novelty_rationale: str = ""
     also_considered: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
