@@ -23,7 +23,8 @@ def robust_outliers(series: dict[str, Provenance], config: dict) -> list[Anomaly
     candidates = []
     for name, result in series.items():
         candidates.append((name, result))
-        candidates.append((f"{name}_qoq", Provenance(result.values.pct_change(), result.fact_ids)))
+        candidates.append((f"{name}_qoq",
+                          Provenance(result.values.pct_change(fill_method=None), result.fact_ids)))
     for name, result in candidates:
         if len(result.values.dropna()) < rule["min_history"]:
             continue
@@ -53,8 +54,8 @@ def relationship_break(data: dict[str, Provenance], relations: list[dict],
         left, right = data.get(relation["left"]), data.get(relation["right"])
         if left is None or right is None or len(left.values.dropna()) < config["min_history"]:
             continue
-        left_change = left.values.pct_change()
-        right_change = right.values.pct_change()
+        left_change = left.values.pct_change(fill_method=None)
+        right_change = right.values.pct_change(fill_method=None)
         direction = relation.get("direction", "positive")
         divergence = ((left_change * right_change >= 0) if direction == "inverse"
                       else (left_change * right_change <= 0))

@@ -13,6 +13,7 @@ from store.dao import EvidenceStore
 
 SUPPORTED = {".pdf", ".html", ".htm", ".xlsx"}
 EVENT_TERMS = ("merger", "amalgamation", "faq", "scheme of arrangement")
+NON_NUMERIC_TERMS = ("transcript", "call", "rating", "rationale")
 
 
 def source_title_type(path: Path) -> SourceType:
@@ -30,7 +31,7 @@ def source_title_type(path: Path) -> SourceType:
 
 def ingest_company(company: str, root: str | Path = "store/manual_drop",
                    ticker: str | None = None, store: EvidenceStore | None = None,
-                   reingest: bool = False, ocr_seconds: float = 20.0) -> dict:
+                   reingest: bool = False, ocr_seconds: float = 1.0) -> dict:
     store = store or EvidenceStore()
     ticker = ticker or company
     root_path = Path(root).resolve()
@@ -116,9 +117,14 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
                 diagnostics.append(file_diagnostics)
                 continue
             extracted = []
-            for page_number, text in pages:
-                extracted.extend(extract_facts(text, ticker, doc_id, period_hint,
-                                                page_number, file_diagnostics, latest_period))
+            numeric_allowed = not any(term in path.stem.casefold() for term in NON_NUMERIC_TERMS)
+            file_diagnostics["numeric_facts_allowed"] = numeric_allowed
+            if numeric_allowed:
+                for page_number, text in pages:
+                    extracted.extend(extract_facts(text, ticker, doc_id, period_hint,
+                                                   page_number, file_diagnostics, latest_period))
+            else:
+                file_diagnostics["numeric_facts_skipped"] = "text-only source"
             file_diagnostics["facts"] = len(extracted)
             diagnostics.append(file_diagnostics)
         except (OSError, ValueError, RuntimeError) as error:
@@ -138,7 +144,17 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             "rejected": rejected, "empty": empty, "diagnostics": diagnostics,
             "events": events, "duplicate_files": duplicate_files,
             "image_only_files": image_only_files,
-            "validator_rejections": sum(len(item.get("rejected", [])) for item in diagnostics)}
+            "validator_rejections": sum(len(item.get("rejected", [])) for item in diagnostics),
+            "validator_rejections_by_metric": _rejection_counts(diagnostics)}
+
+
+def _rejection_counts(diagnostics: list[dict[str, object]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in diagnostics:
+        for reason in item.get("rejected", []):
+            metric = str(reason).split(":", 1)[0]
+            counts[metric] = counts.get(metric, 0) + 1
+    return counts
 
 
 def _flag_reconciliation(store: EvidenceStore, ticker: str, facts: list[Fact]) -> None:
@@ -245,14 +261,15 @@ def import_csv(path: str | Path, store: EvidenceStore | None = None) -> dict:
 
 
 def coverage(store: EvidenceStore, ticker: str) -> dict[str, dict[str, bool]]:
-    facts = store.facts_for(ticker)
-    periods = sorted({fact.period for fact in facts})
-    metrics = sorted({fact.metric for fact in facts})
+    all_facts = store.facts_for(ticker)
+    facts = validated_facts(store, ticker)
+    periods = sorted({fact.period for fact in all_facts})
+    metrics = sorted({fact.metric for fact in all_facts})
     available = {(fact.metric, fact.period) for fact in facts}
     derived = {
         "gnpa_pct": ("gross_npa",),
         "nnpa_pct": ("net_npa",),
-        "credit_cost": ("provisions_on_npa", "write_offs"),
+        "credit_cost": ("provisions_expense",),
     }
     for metric, prerequisites in derived.items():
         if metric not in metrics:
@@ -261,5 +278,29 @@ def coverage(store: EvidenceStore, ticker: str) -> dict[str, dict[str, bool]]:
             if (all((prerequisite, period) in available for prerequisite in prerequisites) and
                     ("gross_advances", period) in available):
                 available.add((metric, period))
+        if metric == "credit_cost":
+            for period in periods:
+                if (("provisions_expense", period) in available or
+                        ("provisions_on_npa", period) in available) and \
+                        ("gross_advances", period) in available:
+                    available.add((metric, period))
     return {metric: {period: (metric, period) in available for period in periods}
             for metric in sorted(metrics)}
+
+
+def validated_facts(store: EvidenceStore, ticker: str) -> list[Fact]:
+    return [fact for fact in store.facts_for(ticker)
+            if not fact.conflict and not fact.suspect and
+            all(fact.validator_status.values())]
+
+
+def validation_summary(store: EvidenceStore, ticker: str) -> dict[str, dict[str, int]]:
+    summary: dict[str, dict[str, int]] = {}
+    for fact in store.facts_for(ticker):
+        item = summary.setdefault(fact.metric, {"facts": 0, "passed": 0, "rejected": 0})
+        item["facts"] += 1
+        if not fact.conflict and not fact.suspect and all(fact.validator_status.values()):
+            item["passed"] += 1
+        else:
+            item["rejected"] += 1
+    return summary

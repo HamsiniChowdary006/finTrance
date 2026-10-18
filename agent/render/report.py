@@ -9,6 +9,12 @@ def render_report(hypothesis: str, evidence: list[EvidenceItem], timeline: list[
                   also_considered: list[dict] | None = None,
                   warnings: list[str] | None = None) -> RenderedReport:
     safe_evidence = [item for item in evidence if item.doc_id and item.quote]
+    if not safe_evidence:
+        grade = Grade(total=min(grade.total, 3), label="Weak",
+                      points=grade.points,
+                      rationale=grade.rationale + ["No claim_evidence-backed evidence was found."])
+        hypothesis = "No evidence-backed finding"
+        warnings = (warnings or []) + ["No supporting claim_evidence rows; discovery suppressed."]
     return RenderedReport(
         discovery=hypothesis,
         why_it_matters=["This is a research signal, not an investment recommendation.",

@@ -7,7 +7,7 @@ from agent.calc.metrics import credit_cost
 from agent.calc.timeseries import Provenance
 from agent.extractor.document import extract_facts
 from agent.extractor.validators import normalise_amount, period_key, validate_value_context
-from agent.ingest import ingest_company
+from agent.ingest import coverage, ingest_company, validated_facts
 from agent.orchestrator import Orchestrator
 from schemas.models import Document, Fact, PeriodType, SourceType
 from store.dao import EvidenceStore
@@ -171,3 +171,131 @@ def test_source_document_schema_remains_compatible():
 def test_validated_fact_requires_quote():
     facts = fact_result("Q1FY25 Gross Advances 100 crore")
     assert facts[0]["quote"]
+
+
+@pytest.mark.parametrize("text", [
+    "Q4FY24 Write offs GNPA as on Dec'23",
+    "Q4FY24 Write offs GNPA as on Mar'24",
+    "Q4FY24 Write offs GNPA as on FY24",
+])
+def test_date_tokens_are_not_writeoff_values(text):
+    assert fact_result(text, "write_offs") == []
+
+
+def test_credit_cost_requires_same_line_percent():
+    assert fact_result("Q1FY25 Credit cost 2.0%", "credit_cost")
+    assert fact_result("Q1FY25 RoA was 2.0%", "credit_cost") == []
+    assert fact_result("Q1FY25 Credit cost\nRoA was 2.0%", "credit_cost") == []
+
+
+def test_credit_cost_rejects_other_percentage_sentence():
+    assert fact_result("Q1FY25 Credit cost is discussed. RoA 2.0%", "credit_cost") == []
+
+
+def test_transcript_numeric_facts_are_skipped(tmp_path):
+    root = tmp_path / "drop"
+    folder = root / "SYNTHETIC"
+    folder.mkdir(parents=True)
+    (folder / "SYNTHETIC_Q1FY25_transcript.html").write_text(
+        "Q1FY25 Gross Advances 100 crore", encoding="utf-8")
+    result = ingest_company("SYNTHETIC", root, store=EvidenceStore(tmp_path / "db.sqlite"))
+    assert result["facts"] == 0
+
+
+def test_validated_coverage_excludes_conflicts_and_suspects(tmp_path):
+    store = EvidenceStore(tmp_path / "db.sqlite")
+    base = {"ticker": "SYNTHETIC", "metric": "gross_advances", "value": 100,
+            "unit": "INR crore", "period": "Q1FY25", "period_type": PeriodType.QUARTER,
+            "doc_id": "d", "page": 1, "quote": "Gross Advances 100 crore",
+            "extractor": "test", "confidence": 1, "validator_status": {"quote": True}}
+    store.insert_fact(Fact(fact_id="bad", **base, conflict=True))
+    assert coverage(store, "SYNTHETIC")["gross_advances"]["Q1FY25"] is False
+    assert validated_facts(store, "SYNTHETIC") == []
+
+
+def test_aliases_include_bank_appropriate_gross_advances():
+    assert fact_result("Q1FY25 Gross loans 100 crore")
+    assert fact_result("Q1FY25 Advances (gross) 100 crore")
+    assert fact_result("Q1FY25 Total advances 100 crore")
+
+
+def test_casa_ratio_alias_is_canonicalized_in_golden_parser():
+    from agent.cli import store_metric_names
+    store = EvidenceStore(":memory:")
+    assert "casa_deposits" in store_metric_names(store, "SYNTHETIC")
+
+
+def test_no_lookahead_period_is_rejected():
+    assert fact_result("Q1FY25 Gross advances 100 crore", max_period="Q4FY24") == []
+
+
+def test_credit_cost_line_does_not_use_adjacent_line():
+    assert fact_result("Q1FY25 Credit cost\n2.0%", "credit_cost") == []
+
+
+def test_writeoff_quote_is_same_line_only():
+    assert fact_result("Q1FY25 Write offs\n100 crore", "write_offs") == []
+
+
+def test_validator_marks_date_period_failure():
+    valid, statuses, _ = validate_value_context(
+        "write_offs", "23", "Write offs GNPA as on Dec'23", "", "write offs")
+    assert not valid
+    assert not statuses["date_or_period_free"]
+
+
+def test_ratio_roa_context_is_rejected():
+    valid, _, _ = validate_value_context(
+        "credit_cost", "2.0", "Credit cost / RoA 2.0%", "%", "credit cost")
+    assert not valid
+
+
+def test_empty_validated_series_has_no_coverage():
+    store = EvidenceStore(":memory:")
+    assert validated_facts(store, "SYNTHETIC") == []
+
+
+def test_duplicate_source_text_is_reported(tmp_path):
+    root = tmp_path / "drop"
+    folder = root / "SYNTHETIC"
+    folder.mkdir(parents=True)
+    content = "Q1FY25 Gross advances 100 crore"
+    (folder / "presentation_a.html").write_text(content, encoding="utf-8")
+    (folder / "presentation_b.html").write_text(content, encoding="utf-8")
+    result = ingest_company("SYNTHETIC", root, store=EvidenceStore(tmp_path / "db.sqlite"))
+    assert result["duplicate_files"]
+
+
+def test_compute_warning_contains_missing_inputs(tmp_path):
+    store = EvidenceStore(tmp_path / "db.sqlite")
+    result = Orchestrator(store=store).run("SYNTHETIC")
+    compute_events = [event for event in result.events if event["stage"] == "COMPUTE"]
+    assert "missing metrics=" in compute_events[-1]["message"]
+
+
+def test_novelty_marks_missing_context_as_na():
+    from agent.scan.novelty import score_novelty
+    from agent.scan.rules import Anomaly
+    anomaly = Anomaly(rule_id="D1", angle="test", metrics=["gross_advances"],
+                      window=["Q1FY25"], magnitude=1, persistence_quarters=1,
+                      description="test")
+    score_novelty(anomaly, "", "insufficient")
+    assert anomaly.novelty_components["management"] == "n/a"
+    assert anomaly.novelty_components["peer_uniqueness"] == "n/a"
+
+
+def test_renderer_suppresses_evidence_free_discovery():
+    from agent.reason.models import Grade
+    from agent.render.report import render_report
+    report = render_report("Unsafe discovery", [], [], "", "", Grade(
+        total=8, label="Strong", points={}, rationale=[]), [])
+    assert report.discovery == "No evidence-backed finding"
+    assert report.evidence_strength.label == "Weak"
+
+
+def test_open_ended_pct_change_has_no_fill_warning():
+    from agent.calc.timeseries import Provenance
+    from agent.scan.open_ended import robust_outliers
+    config = {"detectors": {"D1": {"min_history": 2, "rolling_window": 2,
+                                    "recent_quarters": 1, "mad_z": 2, "min_delta": 1}}}
+    robust_outliers({"x": Provenance(pd.Series([1.0, None, 3.0]), {})}, config)

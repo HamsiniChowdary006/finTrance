@@ -1,5 +1,5 @@
 metrics:
-  gross_advances: {unit: "INR crore", aliases: ["gross advances", "advances"]}
+  gross_advances: {unit: "INR crore", aliases: ["gross advances", "gross loans", "advances (gross)", "total advances", "advances"]}
   gross_npa: {unit: "INR crore", aliases: ["gross npa", "gross npas", "gross non-performing assets"]}
   net_npa: {unit: "INR crore", aliases: ["net npa", "net npas", "net non-performing assets"]}
   gnpa_pct: {unit: "%", aliases: ["gnpa %", "gross npa %", "gross npa ratio", "% of gross npas to gross advances", "% of gross npa to gross advances"]}

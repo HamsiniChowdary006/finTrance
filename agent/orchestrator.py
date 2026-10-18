@@ -132,9 +132,20 @@ class Orchestrator:
                 compute("casa_ratio", casa_ratio,
                         _provenance(frame, provenance, "casa_deposits"),
                         _provenance(frame, provenance, "total_deposits"))
+        required_metrics = {"gross_advances", "gross_npa", "net_npa",
+                            "write_offs", "provisions_expense", "provisions_on_npa"}
+        missing_metrics = sorted(required_metrics - set(frame.columns))
+        missing_quarters = sorted(set(frame.index) - {
+            period for period in frame.index
+            if all(pd.notna(frame.loc[period, metric]) for metric in required_metrics
+                   if metric in frame.columns)
+        })
+        compute_message = ("computed provenance-carrying metric series" if data else
+                           "insufficient facts for derived metrics; missing metrics=" +
+                           ",".join(missing_metrics) + "; missing quarters=" +
+                           ",".join(missing_quarters))
         self._emit("COMPUTE", "completed" if data else "skipped",
-                   "computed provenance-carrying metric series" if data
-                   else "insufficient facts for derived metrics",
+                   compute_message,
                    {"quarters": len(frame), "derived_metrics": len(data), "errors": len(metric_errors)}, started)
         if metric_errors:
             self._emit("COMPUTE", "warning", "; ".join(metric_errors), started=started)

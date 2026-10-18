@@ -23,7 +23,8 @@ from agent.extractor.validators import (
 LOGGER = logging.getLogger(__name__)
 
 METRICS = {
-    "gross_advances": (["gross advances", "advances"], "INR crore"),
+    "gross_advances": (["gross advances", "gross loans", "advances (gross)",
+                        "total advances", "advances"], "INR crore"),
     "gross_npa": (["gross npa", "gross npas", "gross non-performing assets"], "INR crore"),
     "net_npa": (["net npa", "net npas", "net non-performing assets"], "INR crore"),
     "gnpa_pct": (["gnpa %", "gross npa %", "gross npa ratio",
@@ -80,7 +81,7 @@ def _ocr_page(path: Path, page_number: int, deadline: float) -> str:
 
 
 def read_document_pages(path: str | Path, diagnostics: dict[str, object] | None = None,
-                        aliases: list[str] | None = None, ocr_seconds: float = 20.0,
+                        aliases: list[str] | None = None, ocr_seconds: float = 1.0,
                         count_tables: bool = True
                         ) -> list[tuple[int, str]]:
     path = Path(path)
@@ -115,8 +116,12 @@ def read_document_pages(path: str | Path, diagnostics: dict[str, object] | None 
         ocr_available = bool(shutil.which("tesseract"))
         if any(not text.strip() for _, text in pages) and not ocr_available:
             diagnostics["ocr_error"] = "tesseract executable unavailable"
+        attempted_ocr = 0
         for number, text in pages:
             if not text.strip() and ocr_available:
+                if attempted_ocr >= 1:
+                    continue
+                attempted_ocr += 1
                 text = _ocr_page(path, number, deadline)
                 ocr_pages += bool(text.strip())
             if text.strip():
@@ -194,10 +199,16 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         line_end = text.find("\n", start)
         line_end = len(text) if line_end < 0 else line_end
         line = text[line_start:line_end]
-        next_end = text.find("\n", line_end + 1)
-        adjacent = text[line_end + 1:(len(text) if next_end < 0 else next_end)]
-        window = line[line.find(matched.group(0)) + len(matched.group(0)):] + "\n" + adjacent
-        if re.search(r"\b(?:growth|yoy|qoq|as a %|ratio|per share|eps)\b", line, re.IGNORECASE):
+        window = line[line.find(matched.group(0)) + len(matched.group(0)):]
+        if metric == "credit_cost" and (
+                not re.search(r"\bcredit\s+cost\b", line, re.IGNORECASE)
+                or "%" not in line
+                or re.search(r"\b(?:roa|roe|roa)\b", line, re.IGNORECASE)):
+            if diagnostics is not None:
+                diagnostics.setdefault("rejected", []).append(f"{metric}:not-a-credit-cost-line")
+            continue
+        if re.search(r"\b(?:growth|yoy|qoq|as a %|ratio|per share|eps|roa|roe)\b", line,
+                     re.IGNORECASE):
             if diagnostics is not None:
                 diagnostics.setdefault("rejected", []).append(f"{metric}:context")
             continue
@@ -205,6 +216,9 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         value = None
         for possible in re.finditer(r"(?<!\w)-?(?:\d[\d,.]*)(?!\w)", window):
             numeric_text = possible.group(0)
+            if _looks_like_date_or_period(line, possible.start(), possible.end(), numeric_text):
+                skipped.append(f"{metric}:{numeric_text}:date-or-period")
+                continue
             context = window[max(0, possible.start() - 18):possible.start()].casefold()
             note_pos = context.rfind("note")
             newline_pos = context.rfind("\n")
@@ -229,9 +243,7 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         raw_unit = detected_unit or unit
         if detected_unit != "%" and unit == "INR crore":
             value = normalise_amount(value, raw_unit)
-        quote = (line + ("\n" + adjacent if candidate.end() > len(line) -
-                         (line.find(matched.group(0)) + len(matched.group(0))) else "")).strip()
-        quote = quote[:quote.find("\n") + 1 + candidate.end()] if "\n" in quote else quote
+        quote = line.strip()
         valid, statuses, reason = validate_value_context(
             metric, candidate.group(0), quote, detected_unit, alias)
         if not valid:
@@ -255,6 +267,19 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         diagnostics["aliases_matched"] = sorted(alias_hits)
         diagnostics["skipped_tokens"] = skipped
     return facts
+
+
+def _looks_like_date_or_period(line: str, start: int, end: int, value: str) -> bool:
+    prefix = line[max(0, start - 12):start]
+    suffix = line[end:end + 8]
+    return bool(
+        re.search(r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*['’]?\s*$",
+                  prefix, re.IGNORECASE)
+        or re.search(r"\b(?:fy|q[1-4]\s*fy)\s*$", prefix, re.IGNORECASE)
+        or re.search(r"\bas\s+on\s*$", prefix, re.IGNORECASE)
+        or (len(value) == 4 and value.startswith(("19", "20")))
+        or re.search(r"^\s*[-/]?\s*(?:19|20)\d{2}\b", suffix)
+    )
 
 
 def extract_dependency_passages(text: str, doc_id: str, page: int = 1) -> list[dict[str, object]]:

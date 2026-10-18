@@ -23,6 +23,7 @@ class Anomaly(BaseModel):
     score: float = 0.0
     novelty: float = 0.0
     novelty_rationale: str = ""
+    novelty_components: dict[str, str] = Field(default_factory=dict)
     evidence_quotes: list[str] = Field(default_factory=list)
     doc_ids: list[str] = Field(default_factory=list)
     agreed_detectors: list[str] = Field(default_factory=list)
