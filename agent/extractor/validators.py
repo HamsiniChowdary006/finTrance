@@ -84,10 +84,11 @@ def validate_value_context(metric: str, raw_value: str, quote: str, unit: str,
         "context_clean": True,
     }
     lower = quote.casefold()
+    statuses["date_or_period_free"] = not _date_or_period_token(quote, raw_value)
     if metric in AMOUNT_METRICS:
         statuses["unit_compatible"] = "%" not in unit and "%" not in lower
         statuses["context_clean"] = not re.search(
-            r"\b(?:growth|yoy|qoq|as a %|ratio|per share|eps)\b", lower)
+            r"\b(?:growth|yoy|qoq|as a %|ratio|per share|eps|roa|roe)\b", lower)
     elif metric in RATIO_METRICS:
         # Preserve compatibility with legacy text fixtures that append
         # "crore" to a ratio label; real ratio rows still require a percent
@@ -95,12 +96,24 @@ def validate_value_context(metric: str, raw_value: str, quote: str, unit: str,
         statuses["unit_compatible"] = "%" in unit or (
             "%" in alias and "crore" in lower and re.search(r"\d\s*crore\b", lower) is not None
         )
+        statuses["context_clean"] = not re.search(r"\b(?:roa|roe|growth|yoy|qoq)\b", lower)
     if metric in AMOUNT_METRICS and not unit and float(raw_value.replace(",", "")) < _validation_config()[
             "minimum_amount_without_unit"]:
         statuses["context_clean"] = False
     return all(statuses.values()), statuses, (
         "value/unit/context/adjacency validation failed"
         if not all(statuses.values()) else "")
+
+
+def _date_or_period_token(text: str, raw_value: str) -> bool:
+    escaped = re.escape(raw_value)
+    patterns = (
+        rf"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*['’]?\s*{escaped}\b",
+        rf"\bas\s+on\b[^.\n]{{0,24}}{escaped}\b",
+    )
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+        return True
+    return len(raw_value) == 4 and bool(re.search(rf"\b{escaped}\b", text))
 
 
 def _validation_config() -> dict[str, float]:

@@ -11,7 +11,7 @@ from agent.calc.timeseries import quarterly_frame
 from agent.collector.manual import ManualDropSource
 from agent.extractor.document import extract_facts, read_document_pages
 from agent.extractor.validators import period_key
-from agent.ingest import coverage, import_csv, ingest_company
+from agent.ingest import coverage, import_csv, ingest_company, validated_facts, validation_summary
 from agent.orchestrator import Orchestrator
 from agent.profiler import profile_company
 from agent.render.report import markdown
@@ -30,11 +30,16 @@ CORE_METRICS = (
 def write_golden(args) -> None:
     store = EvidenceStore()
     start_key, end_key = period_key(args.from_period), period_key(args.to_period)
-    facts = [fact for fact in store.facts_for(args.ticker)
+    facts = [fact for fact in validated_facts(store, args.ticker)
              if start_key <= period_key(fact.period) <= end_key and
-             not fact.conflict and not fact.suspect and
-             all(fact.validator_status.values())]
+             fact.period]
     wanted = [item.strip() for item in args.metrics.split(",") if item.strip()]
+    valid_names = set(store_metric_names(store, args.ticker)) | {"casa ratio", "casa_ratio", "credit_cost"}
+    unknown = [item for item in wanted if item.casefold() not in
+               {name.casefold() for name in valid_names}]
+    if unknown:
+        raise ValueError(f"unknown metric name(s): {', '.join(unknown)}; "
+                         f"valid names: {', '.join(sorted(valid_names))}")
     periods = []
     for year in range(start_key[0], end_key[0] + 1):
         for quarter in range(1, 5):
@@ -50,14 +55,15 @@ def write_golden(args) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     for metric in wanted:
-        metric_name = "casa_deposits" if metric.casefold() == "casa ratio" else metric
+        metric_name = ("casa_deposits" if metric.casefold() in {"casa ratio", "casa_ratio"}
+                       else metric)
         for period in periods:
             candidates = [fact for fact in facts
                           if fact.metric == metric_name and fact.period == period]
             candidates.sort(key=lambda fact: priority.get(
                 documents[fact.doc_id].source_type.value, 9))
             fact = candidates[0] if candidates else None
-            if metric.casefold() == "casa ratio":
+            if metric.casefold() in {"casa ratio", "casa_ratio"}:
                 casa = next((item for item in facts if item.metric == "casa_deposits"
                              and item.period == period), None)
                 deposits = next((item for item in facts if item.metric == "total_deposits"
@@ -105,6 +111,57 @@ def write_golden(args) -> None:
         writer.writerows(rows)
 
 
+def store_metric_names(store: EvidenceStore, ticker: str) -> list[str]:
+    return sorted({fact.metric for fact in store.facts_for(ticker)} |
+                  {"gross_advances", "gross_npa", "net_npa", "gnpa_pct", "nnpa_pct",
+                   "slippages", "write_offs", "provisions_expense", "provisions_on_npa",
+                   "casa_deposits", "total_deposits"})
+
+
+def doctor(ticker: str) -> None:
+    store = EvidenceStore()
+    facts = validated_facts(store, ticker)
+    documents = store.documents_for(ticker)
+    events = store.events_for(ticker)
+    summary = validation_summary(store, ticker)
+    print(f"doctor ticker={ticker}")
+    print(f"documents={len(documents)} facts_validated={len(facts)} events={len(events)}")
+    for metric, periods in coverage(store, ticker).items():
+        filled = sum(periods.values())
+        print(f"{metric}: {filled}/{len(periods)} validated quarters")
+    for metric, counts in sorted(summary.items()):
+        print(f"validators {metric}: facts={counts['facts']} passed={counts['passed']} "
+              f"rejected={counts['rejected']}")
+    for document in documents:
+        if "presentation" in document.title.casefold():
+            pages = read_document_pages(document.local_path, count_tables=False)
+            hits = [str(page) for page, text in pages
+                    if any(alias in text.casefold() for alias in
+                           ("gross advances", "gross loans", "advances (gross)", "total advances"))]
+            if hits:
+                print(f"gross_advances_alias_pages {document.title}: {','.join(hits)}")
+    image_only = [document.title for document in documents
+                  if document.title.casefold().endswith(".pdf") and
+                  document.title.casefold().find("results") >= 0 and
+                  not any(f.doc_id == document.doc_id for f in facts)]
+    if image_only:
+        print("image_only_or_unvalidated=" + ", ".join(image_only))
+    duplicates = store.connection.execute(
+        "SELECT sha256, COUNT(*) AS count FROM documents WHERE ticker=? GROUP BY sha256 HAVING COUNT(*) > 1",
+        (ticker,)).fetchall()
+    print("duplicates=" + str(sum(row["count"] - 1 for row in duplicates)))
+    required = {
+        "R1": {"gross_advances", "gnpa_pct"},
+        "R2": {"gross_npa", "write_offs", "gross_advances"},
+        "R3": {"gross_npa", "gross_advances", "provisions_on_npa"},
+        "R4": {"gross_npa", "gross_advances", "provisions_on_npa"},
+    }
+    present = {fact.metric for fact in facts}
+    for rule, metrics in required.items():
+        missing = sorted(metrics - present)
+        print(f"{rule}: {'can run' if not missing else 'blocked; missing ' + ', '.join(missing)}")
+
+
 def main() -> int:
     if hasattr(__import__("sys").stdout, "reconfigure"):
         __import__("sys").stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -128,6 +185,8 @@ def main() -> int:
     ingest.add_argument("--from-dir", default="store/manual_drop")
     ingest.add_argument("--reingest", action="store_true")
     ingest.add_argument("--no-llm", action="store_true")
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.add_argument("--ticker", required=True)
     facts = sub.add_parser("facts")
     facts_sub = facts.add_subparsers(dest="facts_command", required=True)
     facts_import = facts_sub.add_parser("import")
@@ -144,7 +203,9 @@ def main() -> int:
     facts_golden.add_argument("--to", dest="to_period", required=True)
     facts_golden.add_argument("--out", required=True)
     args = parser.parse_args()
-    if args.command == "extract":
+    if args.command == "doctor":
+        doctor(args.ticker)
+    elif args.command == "extract":
         profile = profile_company(args.company)
         profile.symbol = args.company
         docs = ManualDropSource(Path("store/manual_drop")).search(profile)
@@ -233,6 +294,8 @@ def main() -> int:
                   f"ocr_pages={item.get('ocr_pages', 0)} facts={item.get('facts', 0)}")
         print(f"events={result.get('events', 0)}")
         print(f"validator_rejections={result.get('validator_rejections', 0)}")
+        for metric, count in sorted(result.get("validator_rejections_by_metric", {}).items()):
+            print(f"validator_rejections[{metric}]={count}")
         for item in result.get("duplicate_files", []):
             print(f"duplicate: {item}")
         if result.get("image_only_files"):

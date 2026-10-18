@@ -31,7 +31,7 @@ def detect_events(documents: Iterable[Document], keywords: list[str]) -> list[Ev
 
 
 def jump_quarters(series: pd.Series, threshold: float = .15) -> list[object]:
-    changes = series.pct_change()
+    changes = series.pct_change(fill_method=None)
     return list(changes.index[changes.abs() > threshold])
 
 
