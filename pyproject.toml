@@ -17,6 +17,7 @@ dependencies = [
   "python-dotenv>=1.0",
   "streamlit>=1.57",
   "plotly>=5",
+  "pytesseract>=0.3.10",
 ]
 
 [project.optional-dependencies]

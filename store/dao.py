@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from schemas.models import Claim, ClaimEvidence, Document, Fact, Run
+from schemas.models import Claim, ClaimEvidence, Document, Event, Fact, Run
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS source_gaps (
  gap_id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, source TEXT NOT NULL,
  reason TEXT NOT NULL, created TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS events (
+ event_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, doc_id TEXT NOT NULL,
+ title TEXT NOT NULL, period TEXT, page INTEGER NOT NULL, quote TEXT NOT NULL
 );
 """
 
@@ -88,6 +92,27 @@ class EvidenceStore:
             (ticker, source, reason, created),
         )
         self.connection.commit()
+
+    def insert_event(self, event: Event) -> None:
+        self.connection.execute(
+            "INSERT OR REPLACE INTO events VALUES (?,?,?,?,?,?,?)",
+            (event.event_id, event.ticker, event.doc_id, event.title, event.period,
+             event.page, event.quote),
+        )
+        self.connection.commit()
+
+    def delete_document_evidence(self, doc_id: str) -> None:
+        self.connection.execute("DELETE FROM facts WHERE doc_id=?", (doc_id,))
+        self.connection.execute("DELETE FROM events WHERE doc_id=?", (doc_id,))
+        self.connection.commit()
+
+    def events_for(self, ticker: str) -> list[Event]:
+        rows = self.connection.execute(
+            "SELECT * FROM events WHERE ticker=? ORDER BY page, event_id", (ticker,)
+        ).fetchall()
+        return [Event(event_id=row["event_id"], ticker=row["ticker"], doc_id=row["doc_id"],
+                      title=row["title"], period=row["period"], page=row["page"],
+                      quote=row["quote"]) for row in rows]
 
     def facts_for(self, ticker: str, metric: str | None = None) -> list[Fact]:
         query = "SELECT * FROM facts WHERE ticker = ?"
