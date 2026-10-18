@@ -1,22 +1,32 @@
 import hashlib
+import io
+import logging
 import re
+import shutil
+import time
+from functools import lru_cache
 from html import unescape
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
-from agent.extractor.pdf_parse import extract_pages
+from agent.extractor.pdf_parse import extract_target_pages
 from agent.extractor.validators import normalise_amount, parse_period, validate_quote_and_bounds
+
+LOGGER = logging.getLogger(__name__)
 
 METRICS = {
     "gross_advances": (["gross advances", "loan book", "aum", "assets under management"], "INR crore"),
-    "gross_npa": (["gross npa", "gross non-performing assets"], "INR crore"),
-    "net_npa": (["net npa", "net non-performing assets"], "INR crore"),
-    "gnpa_pct": (["gnpa %", "gross npa %", "gross npa ratio"], "%"),
-    "nnpa_pct": (["nnpa %", "net npa %", "net npa ratio"], "%"),
+    "gross_npa": (["gross npa", "gross npas", "gross non-performing assets"], "INR crore"),
+    "net_npa": (["net npa", "net npas", "net non-performing assets"], "INR crore"),
+    "gnpa_pct": (["gnpa %", "gross npa %", "gross npa ratio",
+                  "% of gross npas to gross advances"], "%"),
+    "nnpa_pct": (["nnpa %", "net npa %", "net npa ratio",
+                  "% of net npas to net advances"], "%"),
     "write_offs": (["write offs", "write-offs"], "INR crore"),
-    "provisions_on_npa": (["provisions on npa", "npa provisions"], "INR crore"),
+    "provisions_on_npa": (["provisions on npa", "npa provisions",
+                            "provisions (other than tax) and contingencies"], "INR crore"),
     "stage2_assets": (["stage 2 assets", "stage 2"], "INR crore"),
     "stage3_assets": (["stage 3 assets", "stage 3"], "INR crore"),
     "casa_deposits": (["casa deposits", "casa"], "INR crore"),
@@ -34,66 +44,173 @@ METRICS = {
 }
 
 
+@lru_cache(maxsize=1)
 def configured_metrics() -> dict[str, tuple[list[str], str]]:
     metrics = dict(METRICS)
     for path in (Path("config/metrics_bank.yaml"), Path("config/metrics_nbfc.yaml"),
                  Path("config/metrics_other.yaml")):
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for metric, definition in payload.get("metrics", {}).items():
-            metrics[metric] = (definition.get("aliases", []), definition["unit"])
+            current_aliases, _ = metrics.get(metric, ([], definition["unit"]))
+            aliases = list(dict.fromkeys(current_aliases + definition.get("aliases", [])))
+            metrics[metric] = (aliases, definition["unit"])
     return metrics
 
 
-def read_document(path: str | Path) -> str:
+def _ocr_page(path: Path, page_number: int, deadline: float) -> str:
+    if time.monotonic() >= deadline:
+        return ""
+    try:
+        import fitz
+        import pytesseract
+        image = fitz.open(path)[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        from PIL import Image
+        return pytesseract.image_to_string(Image.open(io.BytesIO(image.tobytes("png"))),
+                                           timeout=max(1, deadline - time.monotonic()))
+    except (ImportError, OSError, RuntimeError, ValueError) as error:
+        LOGGER.warning("OCR skipped for %s page %s: %s", path.name, page_number, error)
+        return ""
+
+
+def read_document_pages(path: str | Path, diagnostics: dict[str, object] | None = None,
+                        aliases: list[str] | None = None, ocr_seconds: float = 20.0,
+                        count_tables: bool = True
+                        ) -> list[tuple[int, str]]:
     path = Path(path)
     limits = yaml.safe_load(Path("config/security.yaml").read_text(encoding="utf-8"))
     if path.stat().st_size > limits["max_document_bytes"]:
         raise ValueError("document exceeds configured size limit")
+    diagnostics = diagnostics if diagnostics is not None else {}
     if path.suffix.casefold() == ".pdf":
-        pages = extract_pages(path)
-        if len(pages) > limits["max_pdf_pages"]:
-            raise ValueError("PDF exceeds configured page limit")
-        return "\n".join(pages)
+        terms = aliases or [alias for values in configured_metrics().values() for alias in values[0]]
+        pages = extract_target_pages(path, terms, limits["max_pdf_pages"], diagnostics)
+        try:
+            import pdfplumber
+            selected_numbers = {number for number, _ in pages}
+            if not count_tables:
+                diagnostics["tables_found"] = "not_requested"
+            elif len(selected_numbers) <= 10:
+                with pdfplumber.open(path) as pdf:
+                    sampled_numbers = sorted(selected_numbers)[:10]
+                    diagnostics["tables_found"] = sum(
+                        len(pdf.pages[number - 1].extract_tables() or [])
+                        for number in sampled_numbers)
+                    if len(selected_numbers) > len(sampled_numbers):
+                        diagnostics["tables_found"] = (
+                            f"{diagnostics['tables_found']} in first {len(sampled_numbers)} pages")
+            else:
+                diagnostics["tables_found"] = "skipped_large_selection"
+        except (ImportError, OSError, ValueError):
+            diagnostics["tables_found"] = 0
+        deadline = time.monotonic() + ocr_seconds
+        output = []
+        ocr_pages = 0
+        ocr_available = bool(shutil.which("tesseract"))
+        if any(not text.strip() for _, text in pages) and not ocr_available:
+            diagnostics["ocr_error"] = "tesseract executable unavailable"
+        for number, text in pages:
+            if not text.strip() and ocr_available:
+                text = _ocr_page(path, number, deadline)
+                ocr_pages += bool(text.strip())
+            if text.strip():
+                output.append((number, text))
+        diagnostics["ocr_pages"] = ocr_pages
+        diagnostics["chars_parsed"] = sum(len(text) for _, text in output)
+        return output
     if path.suffix.casefold() in {".html", ".htm"}:
         raw = path.read_text(encoding="utf-8", errors="replace")
-        text = re.sub(r"<[^>]+>", " ", raw)
-        return re.sub(r"\s+", " ", unescape(text)).strip()
+        return [(1, re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", raw))).strip())]
     if path.suffix.casefold() == ".xlsx":
-        return "\n".join(" ".join(map(str, row)) for frame in pd.read_excel(path, sheet_name=None).values()
+        text = "\n".join(" ".join(map(str, row)) for frame in
+                         pd.read_excel(path, sheet_name=None).values()
                          for row in frame.fillna("").values.tolist())
+        return [(1, text)]
     raise ValueError(f"Unsupported manual document type: {path.suffix}")
 
 
-def extract_facts(text: str, ticker: str, doc_id: str = "manual") -> list[dict[str, object]]:
+def read_document(path: str | Path) -> str:
+    return "\n".join(text for _, text in read_document_pages(path))
+
+
+def _parse_number(numeric_text: str) -> float:
+    numeric_text = numeric_text.strip()
+    if not re.search(r"\d", numeric_text) or numeric_text.endswith((",", ".")):
+        raise ValueError(f"non-numeric value: {numeric_text!r}")
+    if "," in numeric_text and "." not in numeric_text and len(numeric_text.rsplit(",", 1)[1]) == 2:
+        numeric_text = numeric_text.replace(",", ".")
+    else:
+        numeric_text = numeric_text.replace(",", "")
+    return float(numeric_text)
+
+
+def _alias_match(text: str, alias: str) -> re.Match[str] | None:
+    pattern = re.escape(alias).replace(r"\ ", r"\s+")
+    return re.search(pattern, text, re.IGNORECASE)
+
+
+def extract_facts(text: str, ticker: str, doc_id: str = "manual",
+                  period_hint: str | None = None, page: int = 1,
+                  diagnostics: dict[str, object] | None = None) -> list[dict[str, object]]:
     facts: list[dict[str, object]] = []
     period_match = re.search(
         r"(Q[1-4]\s*FY\s*(?:20)?\d{2}|FY\s*(?:20)?\d{2}[-/]?(?:20)?\d{2})",
         text, re.IGNORECASE)
+    period_match = period_match or (re.match(r".*", period_hint or "") if period_hint else None)
     if not period_match:
         return facts
-    period, period_type = parse_period(period_match.group())
+    period, period_type = parse_period(period_match.group() if period_match else period_hint or "")
+    alias_hits = set(diagnostics.get("aliases_matched", []) if diagnostics else [])
+    skipped: list[str] = []
     for metric, (aliases, unit) in configured_metrics().items():
-        alias = next((a for a in aliases if a.casefold() in text.casefold()), None)
-        if not alias:
+        alias_match = next(((a, _alias_match(text, a)) for a in aliases
+                            if _alias_match(text, a)), None)
+        if not alias_match:
             continue
-        match = re.search(re.escape(alias) + r".{0,80}?(-?[\d,]+(?:\.\d+)?)\s*(lakh|crore|million|billion|%)?",
-                          text, re.IGNORECASE | re.DOTALL)
-        if not match:
+        alias, matched = alias_match
+        alias_hits.add(alias)
+        start = matched.end()
+        window = text[start:start + 60]
+        candidate = None
+        value = None
+        for possible in re.finditer(r"(?<!\w)-?(?:\d[\d,.]*)(?!\w)", window):
+            numeric_text = possible.group(0)
+            context = window[max(0, possible.start() - 18):possible.start()].casefold()
+            note_pos = context.rfind("note")
+            newline_pos = context.rfind("\n")
+            if (numeric_text.count(".") >= 2 or
+                    (note_pos >= 0 and newline_pos < note_pos) or
+                    (unit != "%" and re.match(r"\s*%", window[possible.end():]))):
+                continue
+            try:
+                value = _parse_number(numeric_text)
+                candidate = possible
+                break
+            except ValueError as error:
+                skipped.append(f"{metric}:{numeric_text}:{error}")
+                LOGGER.warning("Skipping non-numeric value for %s: %s", metric, numeric_text)
+        if not candidate or value is None:
+            skipped.append(f"{metric}:{alias}:no numeric token")
             continue
-        raw_unit = match.group(2) or unit
-        value = float(match.group(1).replace(",", ""))
+        unit_match = re.search(r"(lakh|crore|million|billion|%)", window[candidate.end():],
+                               re.IGNORECASE)
+        raw_unit = unit_match.group(1) if unit_match else unit
         if raw_unit != "%" and unit == "INR crore":
             value = normalise_amount(value, raw_unit)
-        quote = match.group(0).strip()
+        quote = text[matched.start():start + candidate.end() +
+                     (unit_match.end() if unit_match else 0)].strip()
         result = validate_quote_and_bounds(metric, value, quote, text)
         if result.accepted:
             changed = bool(re.search(
                 r"\b(restated|reclassified|presentation change|one[- ]time)\b", text, re.IGNORECASE))
-            facts.append({"fact_id": hashlib.sha256(f"{doc_id}:{metric}:{period}".encode()).hexdigest()[:16],
-                          "ticker": ticker, "metric": metric, "value": value, "unit": unit,
-                          "period": period, "period_type": period_type, "doc_id": doc_id,
-                          "page": 1, "quote": quote, "extractor": "deterministic",
-                          "confidence": 0.8, "restated": changed})
+            facts.append({"fact_id": hashlib.sha256(
+                f"{doc_id}:{metric}:{period}:{page}".encode()).hexdigest()[:16],
+                "ticker": ticker, "metric": metric, "value": value, "unit": unit,
+                "period": period, "period_type": period_type, "doc_id": doc_id,
+                "page": page, "quote": quote, "extractor": "deterministic",
+                "confidence": 0.8, "restated": changed})
+    if diagnostics is not None:
+        diagnostics["aliases_matched"] = sorted(alias_hits)
+        diagnostics["skipped_tokens"] = skipped
     return facts
 
 

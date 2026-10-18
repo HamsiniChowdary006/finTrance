@@ -21,6 +21,7 @@ class SourceType(StrEnum):
     RATING_RATIONALE = "rating_rationale"
     SEARCH = "search"
     MANUAL = "manual"
+    EVENT = "event"
 
 
 class PeriodType(StrEnum):
@@ -74,6 +75,16 @@ class Fact(BaseModel):
     extractor: str
     confidence: float = Field(ge=0, le=1)
     restated: bool = False
+
+
+class Event(BaseModel):
+    event_id: str
+    ticker: str
+    doc_id: str
+    title: str
+    period: str | None = None
+    page: int = Field(ge=1)
+    quote: str = Field(min_length=1)
 
 
 class Claim(BaseModel):

@@ -87,6 +87,26 @@ investment recommendation.
 6. Export JSON or Markdown with `--format json` or `--format md`; missing evidence is
    reported honestly as a weak/no-finding result.
 
+## Extraction diagnostics and audit
+
+Ingestion prints one diagnostic line per file with page count, parsed-page count,
+text characters, sampled table count, aliases matched, OCR pages, and extracted
+fact count. Long PDFs are scanned page-by-page and only alias/section pages are
+parsed, so the global PDF safety limit applies to parsed pages rather than the
+file's total length. Image-only pages use a bounded `pytesseract` fallback when
+the `tesseract` executable is installed; otherwise they are reported as an
+honest extraction gap.
+
+Inspect stored evidence with:
+
+```text
+python -m agent.cli facts audit --ticker HDFCBANK --sample 10
+```
+
+The audit prints sampled metric/period/value/unit/page/quote rows, coverage,
+events, and every quote that no longer matches its registered source page.
+Merger/FAQ documents are registered as events and are not fact-extracted.
+
 ## P1 angles and dashboard
 
 Funding mix shares, HHI, CASA decline, concentration, and short-term-funding

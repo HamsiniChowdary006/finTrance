@@ -7,6 +7,9 @@ def parse_period(text: str) -> tuple[str, str]:
     quarter = re.search(r"Q([1-4])(?:FY)?(?:20)?(\d{2})", value)
     if quarter:
         return f"Q{quarter.group(1)}FY20{quarter.group(2)}", "quarter"
+    short_fy = re.fullmatch(r"FY(?:20)?(\d{2})", value)
+    if short_fy:
+        return f"FY20{short_fy.group(1)}", "fy"
     fy = re.search(r"FY(?:20)?(\d{2})[-/]?(?:20)?(\d{2})", value)
     if fy:
         return f"FY20{fy.group(2)}", "fy"
