@@ -59,17 +59,12 @@ def write_golden(args) -> None:
         metric_name = ("casa_deposits" if metric.casefold() in {"casa ratio", "casa_ratio"}
                        else metric)
         for period in periods:
-            candidates = [fact for fact in facts
-                          if fact.metric == metric_name and fact.period == period]
-            candidates.sort(key=lambda fact: priority.get(
-                documents[fact.doc_id].source_type.value, 9))
-            fact = candidates[0] if candidates else None
             if metric.casefold() in {"casa ratio", "casa_ratio"}:
                 casa = next((item for item in facts if item.metric == "casa_deposits"
                              and item.period == period), None)
                 deposits = next((item for item in facts if item.metric == "total_deposits"
                                  and item.period == period), None)
-                if casa and deposits:
+                if casa and deposits and deposits.value:
                     rows.append({"metric": metric, "period": period,
                                  "normalized_value": casa.value / deposits.value * 100,
                                  "unit": "%", "basis": casa.basis,
@@ -77,6 +72,16 @@ def write_golden(args) -> None:
                                  "page": casa.page, "quote": casa.quote,
                                  "validators_passed": "derived", "conflict": False})
                     continue
+                rows.append({"metric": metric, "period": period,
+                             "normalized_value": "", "unit": "", "basis": "",
+                             "source_file": "", "page": "", "quote": "MISSING",
+                             "validators_passed": "MISSING", "conflict": False})
+                continue
+            candidates = [fact for fact in facts
+                          if fact.metric == metric_name and fact.period == period]
+            candidates.sort(key=lambda fact: priority.get(
+                documents[fact.doc_id].source_type.value, 9))
+            fact = candidates[0] if candidates else None
             if metric.casefold() == "credit_cost" and not fact:
                 provisions = next((item for item in facts
                                    if item.metric == "provisions_expense" and item.period == period), None)
