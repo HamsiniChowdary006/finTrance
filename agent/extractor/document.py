@@ -71,7 +71,16 @@ def _ocr_page(path: Path, page_number: int, deadline: float) -> str:
     try:
         import fitz
         import pytesseract
-        image = fitz.open(path)[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
+        tesseract_candidates = [
+            shutil.which("tesseract"),
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+        tesseract = next((candidate for candidate in tesseract_candidates
+                          if candidate and Path(candidate).is_file()), None)
+        if tesseract:
+            pytesseract.pytesseract.tesseract_cmd = tesseract
+        image = fitz.open(path)[page_number - 1].get_pixmap(matrix=fitz.Matrix(3, 3))
         from PIL import Image
         return pytesseract.image_to_string(Image.open(io.BytesIO(image.tobytes("png"))),
                                            timeout=max(1, deadline - time.monotonic()))
@@ -81,7 +90,8 @@ def _ocr_page(path: Path, page_number: int, deadline: float) -> str:
 
 
 def read_document_pages(path: str | Path, diagnostics: dict[str, object] | None = None,
-                        aliases: list[str] | None = None, ocr_seconds: float = 1.0,
+                        aliases: list[str] | None = None, ocr_seconds: float = 90.0,
+                        cache_dir: str | Path = "store/cache",
                         count_tables: bool = True
                         ) -> list[tuple[int, str]]:
     path = Path(path)
@@ -110,23 +120,37 @@ def read_document_pages(path: str | Path, diagnostics: dict[str, object] | None 
                 diagnostics["tables_found"] = "skipped_large_selection"
         except (ImportError, OSError, ValueError):
             diagnostics["tables_found"] = 0
-        deadline = time.monotonic() + ocr_seconds
+        file_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        ocr_cache = Path(cache_dir)
+        ocr_cache.mkdir(parents=True, exist_ok=True)
         output = []
         ocr_pages = 0
-        ocr_available = bool(shutil.which("tesseract"))
+        ocr_available = bool(shutil.which("tesseract") or
+                             Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe").is_file() or
+                             Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe").is_file())
         if any(not text.strip() for _, text in pages) and not ocr_available:
             diagnostics["ocr_error"] = "tesseract executable unavailable"
         attempted_ocr = 0
         for number, text in pages:
             if not text.strip() and ocr_available:
-                if attempted_ocr >= 1:
-                    continue
                 attempted_ocr += 1
-                text = _ocr_page(path, number, deadline)
+                cached = ocr_cache / f"{file_digest}_page{number}.txt"
+                if cached.is_file():
+                    text = cached.read_text(encoding="utf-8", errors="replace")
+                    diagnostics.setdefault("ocr_cached_pages", 0)
+                    diagnostics["ocr_cached_pages"] += 1
+                else:
+                    text = _ocr_page(path, number, time.monotonic() + ocr_seconds)
+                    if text.strip():
+                        cached.write_text(text, encoding="utf-8")
+                    else:
+                        diagnostics.setdefault("ocr_incomplete_pages", []).append(number)
                 ocr_pages += bool(text.strip())
             if text.strip():
                 output.append((number, text))
         diagnostics["ocr_pages"] = ocr_pages
+        if diagnostics.get("ocr_incomplete_pages"):
+            diagnostics["ocr_status"] = "OCR incomplete"
         diagnostics["chars_parsed"] = sum(len(text) for _, text in output)
         return output
     if path.suffix.casefold() in {".html", ".htm"}:
@@ -199,7 +223,25 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         line_end = text.find("\n", start)
         line_end = len(text) if line_end < 0 else line_end
         line = text[line_start:line_end]
-        window = line[line.find(matched.group(0)) + len(matched.group(0)):]
+        line_offset = line.find(matched.group(0)) + len(matched.group(0))
+        following_lines = []
+        for following_line in text[line_end + 1:].splitlines()[:3]:
+            following_lines.append(following_line)
+            if re.search(r"(?<!\w)-?(?:\d[\d,.]*)(?!\w)", following_line):
+                break
+        adjacent = "\n".join(following_lines)
+        window = line[line_offset:] + (f"\n{adjacent}" if adjacent else "")
+        other_labels = [
+            other_alias for other_aliases, _ in configured_metrics().values()
+            for other_alias in other_aliases
+            if other_alias.casefold() != alias.casefold() and
+            _alias_match(adjacent, other_alias)
+        ]
+        if other_labels:
+            if diagnostics is not None:
+                diagnostics.setdefault("rejected", []).append(
+                    f"{metric}:intervening label {other_labels[0]}")
+            continue
         if metric == "credit_cost" and (
                 not re.search(r"\bcredit\s+cost\b", line, re.IGNORECASE)
                 or "%" not in line
@@ -235,6 +277,12 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
                 LOGGER.warning("Skipping non-numeric value for %s: %s", metric, numeric_text)
         if not candidate or value is None:
             skipped.append(f"{metric}:{alias}:no numeric token")
+            if diagnostics is not None:
+                diagnostics.setdefault("candidate_rejections", []).append({
+                    "metric": metric, "reason": "no numeric token",
+                    "quote": (line + (f" | {adjacent}" if adjacent else "")).strip(),
+                    "value": "",
+                })
             continue
         unit_match = re.search(r"(lakh\s+crore|trn|tn|trillion|bn|mn|lakh|crore|million|billion|%)",
                                window[candidate.end():],
@@ -243,12 +291,16 @@ def extract_facts(text: str, ticker: str, doc_id: str = "manual",
         raw_unit = detected_unit or unit
         if detected_unit != "%" and unit == "INR crore":
             value = normalise_amount(value, raw_unit)
-        quote = line.strip()
+        quote = (line + (f"\n{adjacent}" if adjacent else "")).strip()
         valid, statuses, reason = validate_value_context(
             metric, candidate.group(0), quote, detected_unit, alias)
         if not valid:
             if diagnostics is not None:
                 diagnostics.setdefault("rejected", []).append(f"{metric}:{reason}")
+                diagnostics.setdefault("candidate_rejections", []).append({
+                    "metric": metric, "reason": reason, "quote": quote,
+                    "value": candidate.group(0),
+                })
             continue
         result = validate_quote_and_bounds(metric, value, quote, text)
         if result.accepted:

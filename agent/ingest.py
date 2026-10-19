@@ -31,7 +31,7 @@ def source_title_type(path: Path) -> SourceType:
 
 def ingest_company(company: str, root: str | Path = "store/manual_drop",
                    ticker: str | None = None, store: EvidenceStore | None = None,
-                   reingest: bool = False, ocr_seconds: float = 1.0) -> dict:
+                   reingest: bool = False, ocr_seconds: float = 90.0) -> dict:
     store = store or EvidenceStore()
     ticker = ticker or company
     root_path = Path(root).resolve()
@@ -55,6 +55,7 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
     latest_period = max(periods, key=period_key) if periods else None
     duplicate_files: list[str] = []
     image_only_files: list[str] = []
+    ocr_incomplete_files: list[str] = []
     seen_text_hashes: dict[str, str] = {}
     inserted_facts: list[Fact] = []
     for path in files:
@@ -91,9 +92,12 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             period_hint = next(iter(re.findall(
                 r"Q[1-4]FY(?:20)?\d{2}|FY(?:20)?\d{2}(?:[-/]?(?:20)?\d{2})?",
                 path.stem, re.IGNORECASE)), None)
-            pages = read_document_pages(path, file_diagnostics, ocr_seconds=ocr_seconds)
+            pages = read_document_pages(path, file_diagnostics, ocr_seconds=ocr_seconds,
+                                        cache_dir=Path("store/cache") / ticker)
             if file_diagnostics.get("ocr_error") and not any(text.strip() for _, text in pages):
                 image_only_files.append(str(path))
+            if file_diagnostics.get("ocr_status") == "OCR incomplete":
+                ocr_incomplete_files.append(str(path))
             file_diagnostics["chars"] = sum(len(text) for _, text in pages)
             full_text = "\n".join(text for _, text in pages)
             text_digest = hashlib.sha256(re.sub(r"\s+", " ", full_text).strip().encode()).hexdigest()
@@ -126,6 +130,8 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             else:
                 file_diagnostics["numeric_facts_skipped"] = "text-only source"
             file_diagnostics["facts"] = len(extracted)
+            file_diagnostics["text_zero_facts"] = bool(
+                full_text.strip() and numeric_allowed and not extracted)
             diagnostics.append(file_diagnostics)
         except (OSError, ValueError, RuntimeError) as error:
             rejected.append({"file": str(path), "reason": str(error)})
@@ -144,6 +150,7 @@ def ingest_company(company: str, root: str | Path = "store/manual_drop",
             "rejected": rejected, "empty": empty, "diagnostics": diagnostics,
             "events": events, "duplicate_files": duplicate_files,
             "image_only_files": image_only_files,
+            "ocr_incomplete_files": ocr_incomplete_files,
             "validator_rejections": sum(len(item.get("rejected", [])) for item in diagnostics),
             "validator_rejections_by_metric": _rejection_counts(diagnostics)}
 
