@@ -234,7 +234,7 @@ def test_credit_cost_line_does_not_use_adjacent_line():
 
 
 def test_writeoff_quote_is_same_line_only():
-    assert fact_result("Q1FY25 Write offs\n100 crore", "write_offs") == []
+    assert fact_result("Q1FY25 Write offs\nBorrowings\n100 crore", "write_offs") == []
 
 
 def test_validator_marks_date_period_failure():
@@ -299,3 +299,45 @@ def test_open_ended_pct_change_has_no_fill_warning():
     config = {"detectors": {"D1": {"min_history": 2, "rolling_window": 2,
                                     "recent_quarters": 1, "mad_z": 2, "min_delta": 1}}}
     robust_outliers({"x": Provenance(pd.Series([1.0, None, 3.0]), {})}, config)
+
+
+def test_adjacent_table_lines_are_accepted_without_intervening_label():
+    facts = extract_facts(
+        "Q1FY26 Gross NPAs\n37040,80\nNet NPAs\n12275.99",
+        "SYNTHETIC", "doc", period_hint="Q1FY26")
+    assert any(item["metric"] == "gross_npa" and item["value"] == pytest.approx(37040.8)
+               for item in facts)
+    assert any(item["metric"] == "net_npa" and item["value"] == pytest.approx(12275.99)
+               for item in facts)
+
+
+def test_percentage_rows_are_accepted_when_value_is_on_next_line():
+    facts = extract_facts(
+        "Q1FY26 % of Gross NPAs to Gross Advances\n1.40%\n"
+        "% of Net NPAs to Net Advances\n0.47%",
+        "SYNTHETIC", "doc", period_hint="Q1FY26")
+    assert any(item["metric"] == "gnpa_pct" and item["value"] == pytest.approx(1.4)
+               for item in facts)
+    assert any(item["metric"] == "nnpa_pct" and item["value"] == pytest.approx(0.47)
+               for item in facts)
+
+
+def test_ocr_page_text_is_cached(tmp_path, monkeypatch):
+    import fitz
+
+    from agent.extractor import document
+    pdf = tmp_path / "image.pdf"
+    doc = fitz.open()
+    doc.new_page()
+    doc.save(pdf)
+    doc.close()
+    monkeypatch.setattr(document, "extract_target_pages", lambda *args: [(1, "")])
+    monkeypatch.setattr(document.shutil, "which", lambda _: "tesseract")
+    calls = []
+    monkeypatch.setattr(document, "_ocr_page",
+                        lambda *args: calls.append(1) or "Gross NPAs 10 crore")
+    cache = tmp_path / "cache"
+    first = document.read_document_pages(pdf, {}, ocr_seconds=1, cache_dir=cache)
+    second = document.read_document_pages(pdf, {}, ocr_seconds=1, cache_dir=cache)
+    assert first == second
+    assert len(calls) == 1

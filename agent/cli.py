@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -58,17 +59,12 @@ def write_golden(args) -> None:
         metric_name = ("casa_deposits" if metric.casefold() in {"casa ratio", "casa_ratio"}
                        else metric)
         for period in periods:
-            candidates = [fact for fact in facts
-                          if fact.metric == metric_name and fact.period == period]
-            candidates.sort(key=lambda fact: priority.get(
-                documents[fact.doc_id].source_type.value, 9))
-            fact = candidates[0] if candidates else None
             if metric.casefold() in {"casa ratio", "casa_ratio"}:
                 casa = next((item for item in facts if item.metric == "casa_deposits"
                              and item.period == period), None)
                 deposits = next((item for item in facts if item.metric == "total_deposits"
                                  and item.period == period), None)
-                if casa and deposits:
+                if casa and deposits and deposits.value:
                     rows.append({"metric": metric, "period": period,
                                  "normalized_value": casa.value / deposits.value * 100,
                                  "unit": "%", "basis": casa.basis,
@@ -76,6 +72,16 @@ def write_golden(args) -> None:
                                  "page": casa.page, "quote": casa.quote,
                                  "validators_passed": "derived", "conflict": False})
                     continue
+                rows.append({"metric": metric, "period": period,
+                             "normalized_value": "", "unit": "", "basis": "",
+                             "source_file": "", "page": "", "quote": "MISSING",
+                             "validators_passed": "MISSING", "conflict": False})
+                continue
+            candidates = [fact for fact in facts
+                          if fact.metric == metric_name and fact.period == period]
+            candidates.sort(key=lambda fact: priority.get(
+                documents[fact.doc_id].source_type.value, 9))
+            fact = candidates[0] if candidates else None
             if metric.casefold() == "credit_cost" and not fact:
                 provisions = next((item for item in facts
                                    if item.metric == "provisions_expense" and item.period == period), None)
@@ -126,9 +132,13 @@ def doctor(ticker: str) -> None:
     summary = validation_summary(store, ticker)
     print(f"doctor ticker={ticker}")
     print(f"documents={len(documents)} facts_validated={len(facts)} events={len(events)}")
-    for metric, periods in coverage(store, ticker).items():
-        filled = sum(periods.values())
-        print(f"{metric}: {filled}/{len(periods)} validated quarters")
+    quarter_periods = sorted({fact.period for fact in store.facts_for(ticker)
+                              if fact.period.startswith("Q")}, key=period_key)
+    current_coverage = coverage(store, ticker)
+    for metric, periods in current_coverage.items():
+        quarter_values = {period: periods.get(period, False) for period in quarter_periods}
+        filled = sum(quarter_values.values())
+        print(f"{metric}: {filled}/{len(quarter_periods)} validated quarters")
     for metric, counts in sorted(summary.items()):
         print(f"validators {metric}: facts={counts['facts']} passed={counts['passed']} "
               f"rejected={counts['rejected']}")
@@ -140,12 +150,44 @@ def doctor(ticker: str) -> None:
                            ("gross advances", "gross loans", "advances (gross)", "total advances"))]
             if hits:
                 print(f"gross_advances_alias_pages {document.title}: {','.join(hits)}")
-    image_only = [document.title for document in documents
-                  if document.title.casefold().endswith(".pdf") and
-                  document.title.casefold().find("results") >= 0 and
-                  not any(f.doc_id == document.doc_id for f in facts)]
+    text_zero: list[str] = []
+    image_only: list[str] = []
+    rejection_reasons: dict[str, dict[str, int]] = {}
+    for document in documents:
+        if "results" not in document.title.casefold():
+            continue
+        diagnostic: dict[str, object] = {}
+        try:
+            pages = read_document_pages(document.local_path, diagnostic, ocr_seconds=0)
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"doctor_skip {document.title}: {error}")
+            continue
+        if not pages:
+            image_only.append(document.title)
+            continue
+        period_hint = next(iter(re.findall(
+            r"Q[1-4]FY(?:20)?\d{2}|FY(?:20)?\d{2}", document.title, re.IGNORECASE)), None)
+        extracted = []
+        for page, text in pages:
+            extracted.extend(extract_facts(text, ticker, document.doc_id, period_hint,
+                                            page, diagnostic))
+        if not extracted:
+            text_zero.append(document.title)
+            if not diagnostic.get("aliases_matched"):
+                all_metric_reasons = rejection_reasons.setdefault("all_metrics", {})
+                all_metric_reasons["no aliases matched"] = (
+                    all_metric_reasons.get("no aliases matched", 0) + 1)
+        for reason in diagnostic.get("rejected", []):
+            metric, detail = str(reason).split(":", 1)
+            bucket = rejection_reasons.setdefault(metric, {})
+            bucket[detail] = bucket.get(detail, 0) + 1
+    if text_zero:
+        print("text_with_zero_facts=" + ", ".join(text_zero))
     if image_only:
-        print("image_only_or_unvalidated=" + ", ".join(image_only))
+        print("image_only_files=" + ", ".join(image_only))
+    for metric, reasons in sorted(rejection_reasons.items()):
+        print(f"rejection_reasons {metric}: " +
+              ", ".join(f"{reason}={count}" for reason, count in sorted(reasons.items())))
     duplicates = store.connection.execute(
         "SELECT sha256, COUNT(*) AS count FROM documents WHERE ticker=? GROUP BY sha256 HAVING COUNT(*) > 1",
         (ticker,)).fetchall()
@@ -159,7 +201,15 @@ def doctor(ticker: str) -> None:
     present = {fact.metric for fact in facts}
     for rule, metrics in required.items():
         missing = sorted(metrics - present)
-        print(f"{rule}: {'can run' if not missing else 'blocked; missing ' + ', '.join(missing)}")
+        if not missing:
+            print(f"{rule}: can run")
+            continue
+        details = []
+        for metric in missing:
+            missing_periods = [period for period in quarter_periods
+                               if not current_coverage.get(metric, {}).get(period, False)]
+            details.append(f"{metric} ({','.join(missing_periods) or 'all quarters'})")
+        print(f"{rule}: blocked; missing " + "; ".join(details))
 
 
 def main() -> int:
@@ -185,6 +235,7 @@ def main() -> int:
     ingest.add_argument("--from-dir", default="store/manual_drop")
     ingest.add_argument("--reingest", action="store_true")
     ingest.add_argument("--no-llm", action="store_true")
+    ingest.add_argument("--ocr-timeout", type=float, default=90.0)
     doctor_parser = sub.add_parser("doctor")
     doctor_parser.add_argument("--ticker", required=True)
     facts = sub.add_parser("facts")
@@ -274,7 +325,7 @@ def main() -> int:
     elif args.command == "ingest":
         store = EvidenceStore()
         result = ingest_company(args.company, args.from_dir, args.ticker, store,
-                                reingest=args.reingest)
+                                reingest=args.reingest, ocr_seconds=args.ocr_timeout)
         print(f"documents={result['documents']} facts={result['facts']} "
               f"rejected={len(result['rejected'])} empty={len(result['empty'])}")
         for metric, periods in coverage(store, result["ticker"]).items():
@@ -292,6 +343,12 @@ def main() -> int:
                   f"tables={item.get('tables_found', 0)} "
                   f"aliases={','.join(item.get('aliases_matched', [])) or '-'} "
                   f"ocr_pages={item.get('ocr_pages', 0)} facts={item.get('facts', 0)}")
+            if item.get("text_zero_facts"):
+                print(f"zero-facts-text-file {item.get('file')}: "
+                      f"{item.get('candidate_rejections', [])}")
+            if item.get("ocr_status"):
+                print(f"{item.get('file')}: {item['ocr_status']} "
+                      f"pages={item.get('ocr_incomplete_pages', [])}")
         print(f"events={result.get('events', 0)}")
         print(f"validator_rejections={result.get('validator_rejections', 0)}")
         for metric, count in sorted(result.get("validator_rejections_by_metric", {}).items()):
@@ -301,6 +358,9 @@ def main() -> int:
         if result.get("image_only_files"):
             print("WARNING image-only files skipped (OCR unavailable): " +
                   ", ".join(result["image_only_files"]))
+        if result.get("ocr_incomplete_files"):
+            print("OCR summary: OCR incomplete for " +
+                  ", ".join(result["ocr_incomplete_files"]))
     elif args.command == "facts":
         if args.facts_command == "import":
             result = import_csv(args.file)

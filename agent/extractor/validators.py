@@ -113,7 +113,8 @@ def _date_or_period_token(text: str, raw_value: str) -> bool:
     )
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
         return True
-    return len(raw_value) == 4 and bool(re.search(rf"\b{escaped}\b", text))
+    return (len(raw_value) == 4 and raw_value.isdigit() and
+            bool(re.search(rf"\b{escaped}\b", text)))
 
 
 def _validation_config() -> dict[str, float]:

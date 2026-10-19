@@ -121,13 +121,16 @@ def unexplained_change_points(result: Provenance, event_periods: set[object],
 
 
 def disclosure_drift(documents: list, config: dict) -> list[Anomaly]:
-    from agent.extractor.document import read_document
+    from agent.extractor.document import read_document_pages
 
     terms = config["detectors"]["D6"]["terms"]
     output = []
     for current, previous in zip(documents[1:], documents):
         try:
-            current_text, previous_text = read_document(current.local_path), read_document(previous.local_path)
+            current_text = "\n".join(text for _, text in read_document_pages(
+                current.local_path, ocr_seconds=0))
+            previous_text = "\n".join(text for _, text in read_document_pages(
+                previous.local_path, ocr_seconds=0))
         except (OSError, ValueError, RuntimeError):
             continue
         newly_present = [term for term in terms if term.casefold() in current_text.casefold()
